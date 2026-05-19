@@ -1,0 +1,1221 @@
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type CSSProperties,
+} from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "../lib/supabase";
+import { getStationId } from "../lib/station";
+import { printJob as itagPrintJob } from "../lib/itag/printJob";
+import { applyMargin, type ApplyMarginInput } from "../lib/settings";
+import { clearLookupCaches } from "../services/ean13Lookup";
+import * as printJobsService from "../services/printJobs";
+import type { RfidPrintJob, RfidPrintJobStatus } from "../services/printJobs";
+import {
+  buildPrintItems,
+  fetchPendingBatches,
+  fetchTodayHistory,
+  resolveBatch,
+  type ProductionBatch,
+  type ResolvedBatch,
+  type PrintedBatchEntry,
+} from "../services/batches";
+import { BatchCard, type CardState } from "./BatchCard";
+import { PrintConfirmModal } from "./PrintConfirmModal";
+import { BackButton } from "./BackButton";
+
+const MAX_VISIBLE = 50;
+// Concorrência baixa pra não estourar rate limit do shopify-analytics.
+// O cache module-level dedupa requests pro mesmo product_id, então
+// mesmo com 50 batches só batemos 1x por produto único.
+const CONCURRENCY = 4;
+
+type PrintingState = { jobId: string; startedAt: number };
+type Filter = "all" | "ready" | "blocked" | "queue" | "history";
+
+function formatError(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === "object") {
+    const err = e as { message?: string; code?: string; hint?: string };
+    const parts: string[] = [];
+    if (err.message) parts.push(err.message);
+    if (err.code) parts.push(`[${err.code}]`);
+    if (err.hint) parts.push(`hint: ${err.hint}`);
+    if (parts.length > 0) return parts.join(" · ");
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
+    }
+  }
+  return String(e);
+}
+
+async function resolveAllWithConcurrency(
+  batches: ProductionBatch[],
+  concurrency: number,
+): Promise<ResolvedBatch[]> {
+  const out: ResolvedBatch[] = new Array(batches.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, batches.length) },
+    async () => {
+      while (next < batches.length) {
+        const i = next++;
+        try {
+          out[i] = await resolveBatch(batches[i]);
+        } catch (e) {
+          console.warn(
+            "[BatchBrowser] resolveBatch failed for",
+            batches[i].batch_code,
+            e,
+          );
+          out[i] = {
+            batch: batches[i],
+            eans: {},
+            skus: {},
+            sources: {},
+            missingSizes: batches[i].sizes.map((s) => s.size),
+            isPrintable: false,
+            shopifyTitle: batches[i].design_name,
+            shopifyColor: batches[i].shirt_color,
+          };
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  return out;
+}
+
+export function BatchBrowser({
+  session,
+  onBack,
+}: {
+  session: Session;
+  onBack: () => void;
+}) {
+  const [batches, setBatches] = useState<ResolvedBatch[]>([]);
+  const [history, setHistory] = useState<PrintedBatchEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [printing, setPrinting] = useState<Map<string, PrintingState>>(
+    new Map(),
+  );
+  const [errors, setErrors] = useState<Map<string, string>>(new Map());
+  const [now, setNow] = useState(() => Date.now());
+  const [filter, setFilter] = useState<Filter>("all");
+  const [pendingConfirm, setPendingConfirm] = useState<ResolvedBatch | null>(
+    null,
+  );
+  const [query, setQuery] = useState("");
+  const [activeJobs, setActiveJobs] = useState<RfidPrintJob[]>([]);
+  const [realtimeStatus, setRealtimeStatus] = useState<
+    "connecting" | "connected" | "disconnected"
+  >("connecting");
+
+  const stationId = getStationId();
+  const operatorId = session.user.id;
+  const operatorEmail = session.user.email ?? "(sem email)";
+
+  const load = useCallback(async (showRefreshing: boolean) => {
+    if (showRefreshing) {
+      setRefreshing(true);
+      clearLookupCaches();
+    }
+    try {
+      const [pending, hist] = await Promise.all([
+        fetchPendingBatches(),
+        fetchTodayHistory(),
+      ]);
+      const visible = pending.slice(0, MAX_VISIBLE);
+      const resolved = await resolveAllWithConcurrency(visible, CONCURRENCY);
+      setBatches(resolved);
+      setHistory(hist);
+      setLoadError(null);
+    } catch (e) {
+      console.error("[BatchBrowser] load error:", e);
+      setLoadError(formatError(e));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load(false);
+  }, [load]);
+
+  // Fila de impressão: fetch + Realtime sub em rfid_print_jobs
+  useEffect(() => {
+    let alive = true;
+    async function loadJobs() {
+      try {
+        const jobs = await printJobsService.fetchActivePrintJobs();
+        if (alive) setActiveJobs(jobs);
+      } catch (e) {
+        console.warn("[BatchBrowser] fetchActivePrintJobs failed:", e);
+      }
+    }
+    loadJobs();
+    const channel = supabase
+      .channel("rfid-print-jobs-queue")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rfid_print_jobs" },
+        () => loadJobs(),
+      )
+      .subscribe((status) => {
+        if (!alive) return;
+        if (status === "SUBSCRIBED") setRealtimeStatus("connected");
+        else if (status === "CHANNEL_ERROR" || status === "CLOSED" || status === "TIMED_OUT")
+          setRealtimeStatus("disconnected");
+        else setRealtimeStatus("connecting");
+      });
+    return () => {
+      alive = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Tick por segundo quando há jobs imprimindo (local OU global)
+  const hasPrintingJobs =
+    printing.size > 0 || activeJobs.some((j) => j.status === "printing");
+  useEffect(() => {
+    if (!hasPrintingJobs) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [hasPrintingJobs]);
+
+  const requestPrint = useCallback((resolved: ResolvedBatch) => {
+    if (!resolved.isPrintable) return;
+    setPendingConfirm(resolved);
+  }, []);
+
+  const confirmAndPrint = useCallback(
+    async (marginConfig: ApplyMarginInput) => {
+      const resolved = pendingConfirm;
+      if (!resolved) return;
+      setPendingConfirm(null);
+      const batch = resolved.batch;
+
+      setErrors((m) => {
+        if (!m.has(batch.id)) return m;
+        const next = new Map(m);
+        next.delete(batch.id);
+        return next;
+      });
+
+      const baseItems = buildPrintItems(resolved);
+      const items = applyMargin(baseItems, marginConfig);
+      const totalMargined = items.reduce((sum, i) => sum + i.quantity, 0);
+
+      let jobId: string;
+      try {
+        jobId = await printJobsService.createPrintJob({
+          batchId: batch.id,
+          batchCode: batch.batch_code,
+          items,
+          shirtColor: resolved.shopifyColor ?? batch.shirt_color,
+          designName: batch.design_name,
+          totalEtiquetas: totalMargined,
+          operatorId,
+          operatorEmail,
+          stationId,
+        });
+      } catch (e) {
+        setErrors((m) => new Map(m).set(batch.id, formatError(e)));
+        return;
+      }
+
+      setPrinting((m) =>
+        new Map(m).set(batch.id, { jobId, startedAt: Date.now() }),
+      );
+
+      try {
+        const result = await itagPrintJob({
+          batchId: batch.id,
+          batchCode: batch.batch_code,
+          items,
+          shirtColor: resolved.shopifyColor ?? batch.shirt_color,
+          designName: batch.design_name,
+          operatorId,
+          audit: { operatorName: operatorEmail },
+        });
+
+        if (result.success) {
+          await printJobsService.markDone(jobId);
+        } else {
+          const detail = result.stage ? ` (${result.stage})` : "";
+          const msg = result.error + detail;
+          await printJobsService.markFailed(jobId, msg);
+          setErrors((m) => new Map(m).set(batch.id, msg));
+        }
+      } catch (e) {
+        const msg = formatError(e);
+        try {
+          await printJobsService.markFailed(jobId, msg);
+        } catch {
+          /* swallow */
+        }
+        setErrors((m) => new Map(m).set(batch.id, msg));
+      } finally {
+        setPrinting((m) => {
+          const next = new Map(m);
+          next.delete(batch.id);
+          return next;
+        });
+        load(false);
+      }
+    },
+    [pendingConfirm, stationId, operatorId, operatorEmail, load],
+  );
+
+  const q = query.trim().toLowerCase();
+  const matchesQuery = (text: string | null | undefined) =>
+    !q || (text ? text.toLowerCase().includes(q) : false);
+  const batchMatches = (b: ResolvedBatch) =>
+    !q ||
+    matchesQuery(b.batch.batch_code) ||
+    matchesQuery(b.batch.design_name) ||
+    matchesQuery(b.shopifyTitle);
+
+  const ready = batches.filter((b) => b.isPrintable && batchMatches(b));
+  const blocked = batches.filter((b) => !b.isPrintable && batchMatches(b));
+  const filteredHistory = history.filter(
+    (h) => !q || matchesQuery(h.batch_code) || matchesQuery(h.design_name),
+  );
+
+  const totalReady = batches.filter((b) => b.isPrintable).length;
+  const totalBlocked = batches.length - totalReady;
+
+  function cardStateFor(batchId: string): CardState {
+    const p = printing.get(batchId);
+    if (p) {
+      return {
+        kind: "printing",
+        elapsedSec: Math.floor((now - p.startedAt) / 1000),
+      };
+    }
+    const e = errors.get(batchId);
+    if (e) return { kind: "failed", error: e };
+    return { kind: "idle" };
+  }
+
+  const toggleFilter = (f: Filter) =>
+    setFilter((cur) => (cur === f ? "all" : f));
+
+  const showQueue = filter === "all" || filter === "queue";
+  const showReady = filter === "all" || filter === "ready";
+  const showBlocked = filter === "all" || filter === "blocked";
+  const showHistory = filter === "all" || filter === "history";
+
+  const printingCount = activeJobs.filter((j) => j.status === "printing").length;
+  const failedCount = activeJobs.filter((j) => j.status === "failed").length;
+
+  // iTAG cloud reachability: inferido do histórico recente.
+  // Sem endpoint de health-check dedicado, usa o último outcome conhecido:
+  // - failed recente → vermelho
+  // - done recente → verde
+  // - sem dados → cinza
+  const itagStatus: "ok" | "failing" | "unknown" = (() => {
+    const HOUR = 60 * 60 * 1000;
+    const cutoff = Date.now() - HOUR;
+    const recentFailed = activeJobs.some(
+      (j) =>
+        j.status === "failed" &&
+        j.completed_at &&
+        new Date(j.completed_at).getTime() > cutoff,
+    );
+    if (recentFailed) return "failing";
+    const recentDone = history.some(
+      (h) => new Date(h.rfid_impresso_at).getTime() > cutoff,
+    );
+    if (recentDone) return "ok";
+    return "unknown";
+  })();
+
+  const handleCancelJob = useCallback((job: RfidPrintJob) => {
+    if (job.status === "printing") {
+      const ok = window.confirm(
+        `Cancelar impressão de ${job.batch_code}?\n\n` +
+          "A impressora RFID pode continuar imprimindo as etiquetas que já foram enviadas pra ela. " +
+          "Use isso só pra remover da fila visual.",
+      );
+      if (!ok) return;
+    }
+    printJobsService.cancelPrintJob(job.id).catch((e) => {
+      console.error("[BatchBrowser] cancelPrintJob failed:", e);
+    });
+  }, []);
+
+  return (
+    <div style={page}>
+      <header style={subHeader}>
+        <div style={subHeaderLeft}>
+          <BackButton onClick={onBack} />
+        </div>
+        <div style={subHeaderCenter}>
+          <h2 style={subHeaderTitle}>Imprimir RFID</h2>
+          <div style={searchWrap}>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={searchIcon}
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar por código de lote ou estampa…"
+              style={searchInput}
+            />
+            {query && (
+              <button
+                onClick={() => setQuery("")}
+                style={clearBtn}
+                aria-label="Limpar busca"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={subHeaderRight}>
+          <StatusChip
+            label="Realtime"
+            tone={
+              realtimeStatus === "connected"
+                ? "ok"
+                : realtimeStatus === "connecting"
+                  ? "warn"
+                  : "fail"
+            }
+            tooltip={
+              realtimeStatus === "connected"
+                ? "Realtime conectado (atualiza ao vivo)"
+                : realtimeStatus === "connecting"
+                  ? "Conectando ao Realtime…"
+                  : "Sem conexão Realtime — Atualizar manualmente"
+            }
+          />
+          <StatusChip
+            label="iTAG"
+            tone={
+              itagStatus === "ok"
+                ? "ok"
+                : itagStatus === "failing"
+                  ? "fail"
+                  : "neutral"
+            }
+            tooltip={
+              itagStatus === "ok"
+                ? "iTAG cloud OK — último print recente concluído"
+                : itagStatus === "failing"
+                  ? "iTAG cloud falhou na última hora — pode ter problema"
+                  : "iTAG cloud sem dados recentes — status desconhecido"
+            }
+          />
+          <button
+            onClick={() => load(true)}
+            disabled={refreshing}
+            style={refreshing ? refreshBtnBusy : refreshBtn}
+          >
+            {refreshing ? "Atualizando…" : "Atualizar"}
+          </button>
+        </div>
+      </header>
+
+      <main style={main}>
+        <div style={statsRow}>
+          <Stat
+            label="prontos"
+            value={totalReady}
+            accent="success"
+            active={filter === "ready"}
+            onClick={() => toggleFilter("ready")}
+          />
+          <Stat
+            label="faltando"
+            value={totalBlocked}
+            accent="warning"
+            active={filter === "blocked"}
+            onClick={() => toggleFilter("blocked")}
+          />
+          {activeJobs.length > 0 && (
+            <Stat
+              label="na fila"
+              value={activeJobs.length}
+              accent="info"
+              active={filter === "queue"}
+              onClick={() => toggleFilter("queue")}
+            />
+          )}
+          <Stat
+            label="impressos hoje"
+            value={history.length}
+            accent="muted"
+            active={filter === "history"}
+            onClick={() => toggleFilter("history")}
+          />
+        </div>
+
+        {loadError && (
+          <div style={errorBox}>
+            <strong>Erro ao carregar:</strong>{" "}
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+              {loadError}
+            </span>
+          </div>
+        )}
+
+        {loading ? (
+          <div style={loadingState}>Carregando lotes…</div>
+        ) : (
+          <>
+            {showQueue && activeJobs.length > 0 && (
+              <Section
+                title="Fila de impressão"
+                count={activeJobs.length}
+                accent={
+                  failedCount > 0
+                    ? "warning"
+                    : printingCount > 0
+                      ? "info"
+                      : "muted"
+                }
+              >
+                <div style={queueList}>
+                  {activeJobs.map((j) => (
+                    <PrintJobRow
+                      key={j.id}
+                      job={j}
+                      nowTs={now}
+                      onCancel={handleCancelJob}
+                    />
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {showReady && (
+              <Section
+                title="Prontos pra imprimir"
+                count={ready.length}
+                accent="success"
+              >
+                {ready.length === 0 ? (
+                  <EmptyState text="Sem lotes prontos no momento." />
+                ) : (
+                  ready.map((r) => (
+                    <BatchCard
+                      key={r.batch.id}
+                      resolved={r}
+                      state={cardStateFor(r.batch.id)}
+                      onPrint={requestPrint}
+                    />
+                  ))
+                )}
+              </Section>
+            )}
+
+            {showBlocked && blocked.length > 0 && (
+              <Section
+                title="Faltando info"
+                count={blocked.length}
+                accent="warning"
+                hint="Coordenador precisa cadastrar EAN13 no catálogo do industrial."
+              >
+                {blocked.map((r) => (
+                  <BatchCard
+                    key={r.batch.id}
+                    resolved={r}
+                    state={cardStateFor(r.batch.id)}
+                    onPrint={requestPrint}
+                  />
+                ))}
+              </Section>
+            )}
+
+            {showHistory && filteredHistory.length > 0 && (
+              <Section
+                title="Histórico de hoje"
+                count={filteredHistory.length}
+                accent="muted"
+              >
+                <div style={historyList}>
+                  {filteredHistory.map((h) => (
+                    <div key={h.id} style={historyRow}>
+                      {h.thumbnail_url ? (
+                        <img
+                          src={h.thumbnail_url}
+                          alt=""
+                          loading="lazy"
+                          style={historyThumb}
+                        />
+                      ) : (
+                        <span style={historyThumbPlaceholder} />
+                      )}
+                      <span style={historyCode}>{h.batch_code}</span>
+                      <span style={historyName}>{h.design_name ?? "—"}</span>
+                      <span style={historyQty}>{h.total_pieces} etiq.</span>
+                      <span style={historyTime}>
+                        {formatTime(h.rfid_impresso_at)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {q &&
+              ready.length === 0 &&
+              blocked.length === 0 &&
+              filteredHistory.length === 0 && (
+                <EmptyState
+                  text={`Nenhum lote bate com "${query}".`}
+                />
+              )}
+
+            {!q &&
+              filter !== "all" &&
+              ((filter === "ready" && ready.length === 0) ||
+                (filter === "blocked" && blocked.length === 0) ||
+                (filter === "history" && history.length === 0)) && (
+                <EmptyState text="Sem entradas nessa categoria." />
+              )}
+          </>
+        )}
+      </main>
+
+      {pendingConfirm && (
+        <PrintConfirmModal
+          resolved={pendingConfirm}
+          onCancel={() => setPendingConfirm(null)}
+          onConfirm={confirmAndPrint}
+        />
+      )}
+    </div>
+  );
+}
+
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function formatElapsedSec(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+const JOB_STATUS_LABEL: Record<RfidPrintJobStatus, string> = {
+  queued: "Aguardando",
+  printing: "Imprimindo",
+  done: "Concluído",
+  failed: "Falhou",
+  cancelled: "Cancelado",
+};
+
+const JOB_STATUS_STYLE: Record<RfidPrintJobStatus, CSSProperties> = {
+  queued: {
+    background: "var(--bg-input)",
+    color: "var(--text-secondary)",
+    borderColor: "var(--border)",
+  },
+  printing: {
+    background: "var(--info-bg)",
+    color: "var(--info-text)",
+    borderColor: "var(--info-border)",
+  },
+  done: {
+    background: "var(--bg-input)",
+    color: "var(--text-secondary)",
+    borderColor: "var(--border)",
+  },
+  failed: {
+    background: "var(--danger-bg)",
+    color: "var(--danger-text)",
+    borderColor: "var(--danger-border)",
+  },
+  cancelled: {
+    background: "var(--bg-input)",
+    color: "var(--text-muted)",
+    borderColor: "var(--border)",
+  },
+};
+
+function PrintJobRow({
+  job,
+  nowTs,
+  onCancel,
+}: {
+  job: RfidPrintJob;
+  nowTs: number;
+  onCancel: (job: RfidPrintJob) => void;
+}) {
+  const startedTs = job.started_at ? new Date(job.started_at).getTime() : null;
+  const elapsed =
+    job.status === "printing" && startedTs
+      ? Math.max(0, Math.floor((nowTs - startedTs) / 1000))
+      : null;
+  const completed = job.completed_at ? formatTime(job.completed_at) : null;
+  const cancelLabel =
+    job.status === "failed" ? "Descartar" : "Cancelar";
+
+  return (
+    <div style={queueRow}>
+      <span style={{ ...queueBadge, ...JOB_STATUS_STYLE[job.status] }}>
+        {JOB_STATUS_LABEL[job.status].toUpperCase()}
+      </span>
+      <div style={queueInfo}>
+        <div style={queueTopLine}>
+          <span style={queueCode}>{job.batch_code}</span>
+          <span style={queueDesign}>
+            {job.design_name ?? "—"}
+            {job.shirt_color && (
+              <>
+                <span style={queueDot}>·</span>
+                {job.shirt_color}
+              </>
+            )}
+          </span>
+        </div>
+        {job.status === "failed" && job.error_message && (
+          <div style={queueError}>{job.error_message}</div>
+        )}
+      </div>
+      <div style={queueMeta}>
+        <span style={queueQty}>{job.total_etiquetas} etiq.</span>
+        {elapsed != null && (
+          <span style={queueTime}>{formatElapsedSec(elapsed)}</span>
+        )}
+        {job.status === "failed" && completed && (
+          <span style={queueTime}>{completed}</span>
+        )}
+        {job.status === "queued" && <span style={queueTime}>aguarda…</span>}
+      </div>
+      <button
+        onClick={() => onCancel(job)}
+        style={cancelRowBtn}
+        title={cancelLabel}
+        aria-label={cancelLabel}
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+function StatusChip({
+  label,
+  tone,
+  tooltip,
+}: {
+  label: string;
+  tone: "ok" | "warn" | "fail" | "neutral";
+  tooltip: string;
+}) {
+  const color =
+    tone === "ok"
+      ? "var(--success-dot)"
+      : tone === "warn"
+        ? "var(--warning-dot)"
+        : tone === "fail"
+          ? "var(--danger-text)"
+          : "var(--text-faint)";
+  return (
+    <div style={statusChip} title={tooltip} aria-label={tooltip}>
+      <span style={{ ...statusDot, background: color }} />
+      <span style={statusLabel}>{label}</span>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  accent,
+  active,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  value: number;
+  accent: "success" | "warning" | "muted" | "info";
+  active: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  const color =
+    accent === "success"
+      ? "var(--success-text)"
+      : accent === "warning"
+        ? "var(--warning-text)"
+        : accent === "info"
+          ? "var(--info-text)"
+          : "var(--text-secondary)";
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...statBlock,
+        background: active ? "var(--bg-card)" : "transparent",
+        borderColor: active ? "var(--border-strong)" : "transparent",
+        cursor: disabled ? "default" : "pointer",
+      }}
+    >
+      <div style={{ ...statValue, color }}>{value}</div>
+      <div style={statLabel}>{label}</div>
+    </button>
+  );
+}
+
+function Section(props: {
+  title: string;
+  count: number;
+  accent: "success" | "warning" | "muted" | "info";
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  const accentColor =
+    props.accent === "success"
+      ? "var(--success-text)"
+      : props.accent === "warning"
+        ? "var(--warning-text)"
+        : props.accent === "info"
+          ? "var(--info-text)"
+          : "var(--text-muted)";
+  return (
+    <section style={section}>
+      <header style={sectionHeader}>
+        <span style={{ ...sectionTitle, color: accentColor }}>
+          {props.title}
+        </span>
+        <span style={sectionCount}>{props.count}</span>
+      </header>
+      {props.hint && <div style={sectionHint}>{props.hint}</div>}
+      {props.children}
+    </section>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return <div style={emptyState}>{text}</div>;
+}
+
+const page: CSSProperties = {
+  minHeight: "100vh",
+  background: "var(--bg)",
+  color: "var(--text)",
+  display: "flex",
+  flexDirection: "column",
+};
+
+const subHeader: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr auto 1fr",
+  gap: 18,
+  alignItems: "center",
+  padding: "22px 40px",
+  borderBottom: "1px solid var(--border)",
+  background: "var(--bg)",
+  position: "sticky",
+  top: 0,
+  zIndex: 5,
+};
+
+const subHeaderLeft: CSSProperties = {
+  gridColumn: "1",
+  justifySelf: "start",
+};
+
+const subHeaderCenter: CSSProperties = {
+  gridColumn: "2",
+  justifySelf: "center",
+  display: "flex",
+  alignItems: "center",
+  gap: 18,
+};
+
+const subHeaderRight: CSSProperties = {
+  gridColumn: "3",
+  justifySelf: "end",
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+};
+
+const searchWrap: CSSProperties = {
+  width: 380,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  background: "var(--bg-input)",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  padding: "0 10px",
+};
+
+const searchIcon: CSSProperties = {
+  width: 14,
+  height: 14,
+  color: "var(--text-muted)",
+  flexShrink: 0,
+};
+
+const searchInput: CSSProperties = {
+  flex: 1,
+  background: "transparent",
+  border: 0,
+  outline: "none",
+  color: "var(--text)",
+  fontSize: 13,
+  padding: "8px 0",
+  fontFamily: "inherit",
+};
+
+const clearBtn: CSSProperties = {
+  background: "transparent",
+  border: 0,
+  color: "var(--text-muted)",
+  cursor: "pointer",
+  fontSize: 12,
+  padding: 2,
+  flexShrink: 0,
+};
+
+const historyThumb: CSSProperties = {
+  width: 32,
+  height: 32,
+  borderRadius: 4,
+  objectFit: "cover",
+  background: "var(--bg-input)",
+  flexShrink: 0,
+};
+
+const historyThumbPlaceholder: CSSProperties = {
+  ...historyThumb,
+  display: "inline-block",
+};
+
+const subHeaderTitle: CSSProperties = {
+  margin: 0,
+  fontSize: 15,
+  fontWeight: 600,
+  color: "var(--text)",
+  letterSpacing: -0.2,
+};
+
+const refreshBtn: CSSProperties = {
+  background: "var(--bg-card)",
+  color: "var(--text-secondary)",
+  border: "1px solid var(--border)",
+  padding: "6px 14px",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: 12,
+  fontWeight: 500,
+};
+
+const refreshBtnBusy: CSSProperties = {
+  ...refreshBtn,
+  opacity: 0.6,
+  cursor: "wait",
+};
+
+const main: CSSProperties = {
+  flex: 1,
+  padding: "28px 40px",
+  maxWidth: 1280,
+  width: "100%",
+  margin: "0 auto",
+  boxSizing: "border-box",
+};
+
+const statsRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  marginBottom: 28,
+  padding: "6px 0 16px",
+  borderBottom: "1px solid var(--border)",
+};
+
+const statBlock: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 4,
+  padding: "10px 18px",
+  border: "1px solid transparent",
+  borderRadius: 10,
+  transition: "background 120ms, border-color 120ms",
+};
+
+const statValue: CSSProperties = {
+  fontSize: 26,
+  fontWeight: 700,
+  lineHeight: 1,
+  letterSpacing: -0.5,
+};
+
+const statLabel: CSSProperties = {
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: 0.8,
+  fontWeight: 600,
+  color: "var(--text-muted)",
+};
+
+const section: CSSProperties = {
+  marginBottom: 32,
+};
+
+const sectionHeader: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  marginBottom: 12,
+};
+
+const sectionTitle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: 1.2,
+};
+
+const sectionCount: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 500,
+  color: "var(--text-muted)",
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  padding: "2px 7px",
+  borderRadius: 999,
+  fontFamily: "var(--font-mono)",
+};
+
+const sectionHint: CSSProperties = {
+  fontSize: 12,
+  color: "var(--text-muted)",
+  marginBottom: 12,
+  marginTop: -4,
+};
+
+const emptyState: CSSProperties = {
+  padding: 32,
+  background: "var(--bg-card)",
+  border: "1px dashed var(--border)",
+  borderRadius: 10,
+  color: "var(--text-muted)",
+  textAlign: "center",
+  fontSize: 13,
+};
+
+const loadingState: CSSProperties = {
+  padding: 40,
+  textAlign: "center",
+  color: "var(--text-muted)",
+  fontSize: 13,
+};
+
+const errorBox: CSSProperties = {
+  background: "var(--danger-bg)",
+  color: "var(--danger-text)",
+  border: "1px solid var(--danger-border)",
+  padding: "12px 16px",
+  borderRadius: 8,
+  fontSize: 13,
+  marginBottom: 20,
+  lineHeight: 1.5,
+};
+
+const historyList: CSSProperties = {
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  overflow: "hidden",
+};
+
+const historyRow: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "auto auto 1fr auto auto",
+  gap: 14,
+  alignItems: "center",
+  padding: "8px 14px",
+  borderBottom: "1px solid var(--border)",
+  fontSize: 13,
+};
+
+const historyCode: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  color: "var(--text)",
+  fontWeight: 600,
+};
+
+const historyName: CSSProperties = {
+  color: "var(--text-secondary)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const historyQty: CSSProperties = {
+  color: "var(--text-muted)",
+  fontSize: 12,
+  fontFamily: "var(--font-mono)",
+};
+
+const historyTime: CSSProperties = {
+  color: "var(--text-faint)",
+  fontSize: 11,
+  fontFamily: "var(--font-mono)",
+};
+
+const queueList: CSSProperties = {
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  overflow: "hidden",
+};
+
+const queueRow: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "auto 1fr auto auto",
+  gap: 14,
+  alignItems: "center",
+  padding: "12px 14px",
+  borderBottom: "1px solid var(--border)",
+  fontSize: 13,
+};
+
+const statusChip: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "4px 9px",
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: 999,
+  fontSize: 11,
+};
+
+const statusDot: CSSProperties = {
+  display: "inline-block",
+  width: 7,
+  height: 7,
+  borderRadius: "50%",
+};
+
+const statusLabel: CSSProperties = {
+  color: "var(--text-secondary)",
+  fontWeight: 500,
+  letterSpacing: 0.2,
+};
+
+const cancelRowBtn: CSSProperties = {
+  background: "transparent",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  color: "var(--text-muted)",
+  cursor: "pointer",
+  fontSize: 11,
+  width: 26,
+  height: 26,
+  display: "grid",
+  placeItems: "center",
+  padding: 0,
+};
+
+const queueBadge: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: 0.7,
+  padding: "3px 8px",
+  borderRadius: 999,
+  border: "1px solid",
+  alignSelf: "center",
+};
+
+const queueInfo: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  minWidth: 0,
+};
+
+const queueTopLine: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  gap: 10,
+  overflow: "hidden",
+};
+
+const queueCode: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  color: "var(--text)",
+  fontWeight: 700,
+  fontSize: 14,
+};
+
+const queueDesign: CSSProperties = {
+  color: "var(--text-secondary)",
+  fontSize: 13,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const queueDot: CSSProperties = {
+  margin: "0 6px",
+  color: "var(--text-faint)",
+};
+
+const queueError: CSSProperties = {
+  fontSize: 11,
+  color: "var(--danger-text)",
+  background: "var(--danger-bg)",
+  border: "1px solid var(--danger-border)",
+  padding: "4px 8px",
+  borderRadius: 6,
+  marginTop: 2,
+};
+
+const queueMeta: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-end",
+  gap: 2,
+};
+
+const queueQty: CSSProperties = {
+  fontSize: 12,
+  color: "var(--text-muted)",
+  fontFamily: "var(--font-mono)",
+};
+
+const queueTime: CSSProperties = {
+  fontSize: 11,
+  color: "var(--text-faint)",
+  fontFamily: "var(--font-mono)",
+};

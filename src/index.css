@@ -1,0 +1,170 @@
+@import url("https://fonts.googleapis.com/css2?family=Anton&display=swap");
+
+:root {
+  /* Surfaces */
+  --bg: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-card: #161618;
+  --bg-card-hover: #1c1c1f;
+  --bg-input: #1f1f22;
+
+  /* Text */
+  --text: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-faint: #52525b;
+
+  /* Borders */
+  --border: #27272a;
+  --border-strong: #3f3f46;
+  --border-focus: #71717a;
+
+  /* Primary action (white on dark, max legibilidade) */
+  --accent: #fafafa;
+  --accent-text: #0a0a0a;
+  --accent-hover: #e4e4e7;
+
+  /* Status — pronto */
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --success-text: #34d399;
+  --success-border: rgba(16, 185, 129, 0.25);
+  --success-dot: #10b981;
+
+  /* Status — imprimindo / info */
+  --info-bg: rgba(59, 130, 246, 0.12);
+  --info-text: #60a5fa;
+  --info-border: rgba(59, 130, 246, 0.25);
+
+  /* Status — faltando info */
+  --warning-bg: rgba(251, 191, 36, 0.12);
+  --warning-text: #fbbf24;
+  --warning-border: rgba(251, 191, 36, 0.25);
+  --warning-dot: #f59e0b;
+
+  /* Status — falhou */
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --danger-text: #f87171;
+  --danger-border: rgba(239, 68, 68, 0.25);
+
+  /* Pills — verde unificado pra "tem EAN" (local OU shopify), vermelho pra "faltando" */
+  --pill-local-bg: rgba(16, 185, 129, 0.12);
+  --pill-local-text: #34d399;
+  --pill-shopify-bg: rgba(16, 185, 129, 0.12);
+  --pill-shopify-text: #34d399;
+  --pill-missing-bg: rgba(239, 68, 68, 0.12);
+  --pill-missing-text: #f87171;
+
+  /* Typography */
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Anton", "Bebas Neue", "Impact", "Arial Black", sans-serif;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  /* Surfaces */
+  --bg: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f4f4f5;
+  --bg-input: #f4f4f5;
+
+  /* Text */
+  --text: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+  --text-faint: #a1a1aa;
+
+  /* Borders */
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --border-focus: #71717a;
+
+  /* Primary action (black on light) */
+  --accent: #18181b;
+  --accent-text: #fafafa;
+  --accent-hover: #27272a;
+
+  /* Status — pronto */
+  --success-bg: rgba(5, 150, 105, 0.1);
+  --success-text: #047857;
+  --success-border: rgba(5, 150, 105, 0.3);
+  --success-dot: #10b981;
+
+  /* Status — imprimindo / info */
+  --info-bg: rgba(37, 99, 235, 0.1);
+  --info-text: #1d4ed8;
+  --info-border: rgba(37, 99, 235, 0.3);
+
+  /* Status — faltando info */
+  --warning-bg: rgba(217, 119, 6, 0.12);
+  --warning-text: #b45309;
+  --warning-border: rgba(217, 119, 6, 0.35);
+  --warning-dot: #f59e0b;
+
+  /* Status — falhou */
+  --danger-bg: rgba(220, 38, 38, 0.1);
+  --danger-text: #b91c1c;
+  --danger-border: rgba(220, 38, 38, 0.3);
+
+  /* Pills — verde unificado pra "tem EAN", vermelho pra "faltando" */
+  --pill-local-bg: rgba(5, 150, 105, 0.12);
+  --pill-local-text: #047857;
+  --pill-shopify-bg: rgba(5, 150, 105, 0.12);
+  --pill-shopify-text: #047857;
+  --pill-missing-bg: rgba(220, 38, 38, 0.12);
+  --pill-missing-text: #b91c1c;
+
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+}
+
+input {
+  font-family: inherit;
+}
+
+::selection {
+  background: rgba(250, 250, 250, 0.18);
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
