@@ -124,7 +124,7 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
           <ModuleCard
             label="Produção"
             tagline="Gerar tags RFID"
-            description="Pra cada lote em produção, lê os EANs e imprime as etiquetas com margem"
+            description="Pra cada lote em produção, lê os EANs e imprime as etiquetas identificadoras (RFID)"
             icon={<IconTag />}
             iconBg="var(--info-bg)"
             iconColor="var(--info-text)"
