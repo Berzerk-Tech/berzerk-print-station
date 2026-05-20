@@ -1,9 +1,5 @@
+mod itag_client;
 mod oauth_loopback;
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -12,8 +8,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
-            greet,
-            oauth_loopback::start_oauth_listener
+            oauth_loopback::start_oauth_listener,
+            itag_client::itag_ping,
+            itag_client::itag_send_command,
+            itag_client::itag_poll_tags,
+            itag_client::itag_reinventory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -12,6 +12,7 @@ import {
   type ThermalPrinter,
   type RfidReader,
 } from "../lib/devices";
+import { pingItag, type ConnectionStatus } from "../lib/rfid";
 
 type Props = { onBack: () => void };
 
@@ -221,7 +222,29 @@ function ReaderCard({
   onSave: (r: RfidReader) => void;
 }) {
   const [draft, setDraft] = useState(reader);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ConnectionStatus | null>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(reader);
+
+  // Atualiza o draft quando os defaults externos mudam (Salvar reseta)
+  useEffect(() => { setDraft(reader); }, [reader]);
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const status = await pingItag(draft.itagHost);
+      setTestResult(status);
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        host: draft.itagHost,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setTesting(false);
+    }
+  }
 
   return (
     <div style={configCard}>
@@ -254,7 +277,7 @@ function ReaderCard({
       </Field>
 
       {draft.mode === "via-proxy" && (
-        <Field label="Endereço do proxy HTTPS" hint="rfid-proxy rodando no PC">
+        <Field label="Endereço do proxy HTTPS" hint="rfid-proxy rodando no PC (legado)">
           <input
             style={input}
             className="berzerk-input"
@@ -264,14 +287,49 @@ function ReaderCard({
         </Field>
       )}
 
-      <Field label="Endereço do iTAG Monitor" hint="App desktop Windows que conversa com o leitor">
-        <input
-          style={input}
-          className="berzerk-input"
-          value={draft.itagHost}
-          onChange={(e) => setDraft({ ...draft, itagHost: e.target.value })}
-        />
+      <Field
+        label="Endereço do iTAG Monitor"
+        hint="O Print Station fala HTTP direto — sem proxy"
+      >
+        <div style={inputWithButton}>
+          <input
+            style={{ ...input, flex: 1 }}
+            className="berzerk-input"
+            value={draft.itagHost}
+            onChange={(e) => setDraft({ ...draft, itagHost: e.target.value })}
+          />
+          <button
+            type="button"
+            style={btnGhost}
+            className="berzerk-btn-ghost"
+            onClick={handleTest}
+            disabled={testing}
+          >
+            {testing ? "Testando…" : "Testar conexão"}
+          </button>
+        </div>
       </Field>
+
+      {testResult && (
+        <div
+          style={{
+            ...testBox,
+            background: testResult.ok ? "var(--success-bg)" : "var(--danger-bg)",
+            color: testResult.ok ? "var(--success-text)" : "var(--danger-text)",
+            borderColor: testResult.ok ? "var(--success-border)" : "var(--danger-border)",
+          }}
+        >
+          <span style={testIcon}>{testResult.ok ? "●" : "○"}</span>
+          <div style={testCopy}>
+            <strong style={testTitle}>
+              {testResult.ok ? "iTAG Monitor respondeu" : "Não consegui conectar"}
+            </strong>
+            {testResult.message && (
+              <code style={testDetail}>{testResult.message}</code>
+            )}
+          </div>
+        </div>
+      )}
 
       {dirty && (
         <div style={cardActions}>
@@ -531,6 +589,46 @@ const input: CSSProperties = {
   borderRadius: 8,
   boxSizing: "border-box",
   transition: "border-color 120ms",
+};
+
+const inputWithButton: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "stretch",
+};
+
+const testBox: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 10,
+  padding: "10px 14px",
+  border: "1px solid",
+  borderRadius: 10,
+  fontSize: 12,
+};
+
+const testIcon: CSSProperties = {
+  fontSize: 16,
+  lineHeight: 1,
+  marginTop: 1,
+};
+
+const testCopy: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  flex: 1,
+};
+
+const testTitle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const testDetail: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  opacity: 0.85,
 };
 
 const radioGroup: CSSProperties = {
