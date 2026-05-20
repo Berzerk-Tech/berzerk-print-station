@@ -31,3 +31,8 @@ dist-ssr
 # Tauri / Rust build artifacts
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# Dev runtime helpers (escritos pelo Start-Process do dev loop)
+.dev-pid.txt
+.dev-out.log
+.dev-err.log

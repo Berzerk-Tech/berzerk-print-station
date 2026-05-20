@@ -6,7 +6,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "deep-link:default",
     "updater:default",
     "process:allow-restart",
     "core:window:allow-set-fullscreen",

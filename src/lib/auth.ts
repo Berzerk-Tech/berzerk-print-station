@@ -1,19 +1,28 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { onOpenUrl, getCurrent } from "@tauri-apps/plugin-deep-link";
 import { supabase } from "./supabase";
 
-const REDIRECT_URL = "berzerk-print://callback";
 const ALLOWED_HD = "berzerk.com.br";
-const SCHEME_PREFIX = "berzerk-print://";
+
+// O server loopback Rust sobe em 127.0.0.1:54321 e captura o redirect do Supabase.
+// Custom schemes (berzerk-print://) foram trocados por loopback HTTP porque o Chrome
+// 120+ bloqueia silenciosamente custom schemes em redirects sem user gesture imediato.
 
 export async function signInWithGoogle(): Promise<{ error: Error | null }> {
+  let loopbackUrl: string;
+  try {
+    loopbackUrl = await invoke<string>("start_oauth_listener");
+  } catch (err) {
+    return { error: err instanceof Error ? err : new Error(String(err)) };
+  }
+
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
-      redirectTo: REDIRECT_URL,
+      redirectTo: loopbackUrl,
       skipBrowserRedirect: true,
       queryParams: {
-        // hd restringe o consent screen ao Google Workspace berzerk.com.br
         hd: ALLOWED_HD,
         prompt: "select_account",
       },
@@ -25,71 +34,55 @@ export async function signInWithGoogle(): Promise<{ error: Error | null }> {
   return { error: null };
 }
 
-export async function handleOAuthCallback(url: string): Promise<{ error: Error | null }> {
+export async function handleOAuthCallback(callbackPath: string): Promise<{ error: Error | null }> {
   try {
-    const parsed = new URL(url);
+    // callbackPath é tipo "/oauth-callback?code=...&state=..." (sem origin)
+    const parsed = new URL(callbackPath, "http://127.0.0.1:54321");
 
-    // PKCE flow (default no Supabase JS v2): ?code=...
     const code = parsed.searchParams.get("code");
     if (code) {
       const { error } = await supabase.auth.exchangeCodeForSession(code);
       return { error };
     }
 
-    // Erro vindo do Supabase/Google: ?error=...&error_description=...
     const errParam = parsed.searchParams.get("error");
     if (errParam) {
       const desc = parsed.searchParams.get("error_description") ?? errParam;
       return { error: new Error(desc) };
     }
 
-    // Fallback: implicit flow no hash fragment (#access_token=...&refresh_token=...)
-    const hash = parsed.hash.startsWith("#") ? parsed.hash.slice(1) : parsed.hash;
-    if (hash) {
-      const params = new URLSearchParams(hash);
-      const access_token = params.get("access_token");
-      const refresh_token = params.get("refresh_token");
-      if (access_token && refresh_token) {
-        const { error } = await supabase.auth.setSession({ access_token, refresh_token });
-        return { error };
-      }
-    }
-
-    return { error: new Error("Callback sem code nem tokens") };
+    return { error: new Error("Callback sem code") };
   } catch (err) {
     return { error: err instanceof Error ? err : new Error(String(err)) };
   }
 }
 
 export function listenForOAuthCallback(handler: (url: string) => void): () => void {
-  let unlisten: (() => void) | null = null;
+  let unlisten: UnlistenFn | null = null;
+  let errUnlisten: UnlistenFn | null = null;
   let stopped = false;
 
-  // Cold start: app aberto via deep link (instância nova) — pega URL inicial
-  getCurrent()
-    .then((urls) => {
-      if (stopped || !urls) return;
-      const target = urls.find((u) => u.startsWith(SCHEME_PREFIX));
-      if (target) handler(target);
+  listen<string>("oauth-callback-url", (event) => {
+    handler(event.payload);
+  })
+    .then((fn) => {
+      if (stopped) fn();
+      else unlisten = fn;
     })
     .catch(() => {});
 
-  // Warm start: app já estava aberto, deep link chega via plugin (re-emitido pelo single-instance)
-  onOpenUrl((urls) => {
-    const target = urls.find((u) => u.startsWith(SCHEME_PREFIX));
-    if (target) handler(target);
+  listen<string>("oauth-callback-error", (event) => {
+    console.error("[oauth-loopback] erro do server:", event.payload);
   })
     .then((fn) => {
-      if (stopped) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
+      if (stopped) fn();
+      else errUnlisten = fn;
     })
     .catch(() => {});
 
   return () => {
     stopped = true;
     if (unlisten) unlisten();
+    if (errUnlisten) errUnlisten();
   };
 }

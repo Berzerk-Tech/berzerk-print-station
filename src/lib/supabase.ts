@@ -14,5 +14,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
+    // PKCE força code-in-query (?code=...) em vez de implicit hash (#access_token=...).
+    // O loopback HTTP local não vê hash fragments — browser não envia ao servidor.
+    flowType: "pkce",
   },
 });

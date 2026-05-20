@@ -35,11 +35,6 @@
     ]
   },
   "plugins": {
-    "deep-link": {
-      "desktop": {
-        "schemes": ["berzerk-print"]
-      }
-    },
     "updater": {
       "endpoints": [
         "https://github.com/Berzerk-Tech/berzerk-print-station/releases/latest/download/latest.json"
