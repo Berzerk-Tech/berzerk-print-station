@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "berzerk-print-station",
+      "name": "berzerk-rfid",
       "dependencies": {
         "@supabase/supabase-js": "^2.106.0",
         "@tauri-apps/api": "^2",
