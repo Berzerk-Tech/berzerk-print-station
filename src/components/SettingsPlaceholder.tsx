@@ -7,6 +7,7 @@ type Props = { onBack: () => void };
 
 export function SettingsPlaceholder({ onBack }: Props) {
   const stationId = getStationId();
+
   return (
     <div style={page}>
       <header style={subHeader}>
@@ -16,38 +17,65 @@ export function SettingsPlaceholder({ onBack }: Props) {
         <h2 style={title}>Configurações</h2>
         <div style={subHeaderRight} />
       </header>
+
       <main style={body}>
         <div style={section}>
+          <SectionHeader kicker="Sistema" label="Atualizações" />
           <UpdateChecker />
         </div>
-        <div style={card}>
-          <div style={badge}>Em breve</div>
-          <h3 style={cardTitle}>Configuração de dispositivos e estação</h3>
-          <p style={cardText}>
-            Aqui vai ficar tudo que precisa ser ajustado por estação ou por
-            ambiente. Por enquanto a maioria dessas configs mora em arquivo
-            ou variável de ambiente — vamos trazer pra UI conforme o app
-            amadurece.
-          </p>
-          <ul style={list}>
-            <li>Impressora RFID (porta USB / IP / status)</li>
-            <li>Leitor RFID local (host do proxy HTTPS)</li>
-            <li>iTAG cloud endpoint + credenciais (read-only)</li>
-            <li>Margem de segurança default (atalho pro modo / valor padrão)</li>
-            <li>Estação: ID atual + opção de regenerar (cuidado: muda histórico)</li>
-            <li>Tema e fullscreen no boot (auto-aplicar)</li>
-            <li>Log de atividade (últimas N ações pra debug)</li>
-          </ul>
-          <div style={infoLine}>
-            <span style={infoLabel}>Estação atual:</span>
-            <code style={code}>{stationId}</code>
+
+        <div style={section}>
+          <SectionHeader kicker="Identificação" label="Estação" />
+          <div style={infoCard}>
+            <div style={infoRow}>
+              <span style={infoLabel}>ID completo</span>
+              <code style={infoValueMono}>{stationId}</code>
+            </div>
+            <p style={infoHelp}>
+              Identificador único deste PC. Gerado no primeiro boot e persistido localmente.
+              Trocar invalida o histórico de impressões desta estação.
+            </p>
           </div>
-          <p style={footerText}>
-            Sem ETA. Volta aqui quando o fluxo principal de impressão estiver maduro.
-          </p>
+        </div>
+
+        <div style={section}>
+          <SectionHeader kicker="Roadmap" label="Configurações futuras" />
+          <div style={roadmapCard}>
+            <p style={roadmapIntro}>
+              Por enquanto a maioria dessas configs vive em arquivo/env. Conforme o fluxo
+              principal amadurece, vão migrar pra esta tela:
+            </p>
+            <ul style={roadmapList}>
+              <RoadmapItem text="Impressora RFID — porta USB / IP / status" />
+              <RoadmapItem text="Leitor RFID local — host do proxy HTTPS" />
+              <RoadmapItem text="iTAG cloud endpoint + credenciais (read-only)" />
+              <RoadmapItem text="Margem de segurança default (atalho pro modo / valor padrão)" />
+              <RoadmapItem text="Estação — opção de regenerar ID (cuidado: muda histórico)" />
+              <RoadmapItem text="Tema e fullscreen no boot (auto-aplicar)" />
+              <RoadmapItem text="Log de atividade — últimas N ações pra debug" />
+            </ul>
+          </div>
         </div>
       </main>
     </div>
+  );
+}
+
+function SectionHeader({ kicker, label }: { kicker: string; label: string }) {
+  return (
+    <div style={sectionHeader}>
+      <span style={sectionKicker}>― {kicker} ―</span>
+      <h3 style={sectionLabel}>{label}</h3>
+    </div>
+  );
+}
+
+function RoadmapItem({ text }: { text: string }) {
+  return (
+    <li style={roadmapItem}>
+      <span style={roadmapBullet} />
+      <span>{text}</span>
+    </li>
   );
 }
 
@@ -64,7 +92,7 @@ const subHeader: CSSProperties = {
   gridTemplateColumns: "1fr auto 1fr",
   alignItems: "center",
   gap: 18,
-  padding: "22px 40px",
+  padding: "20px 40px",
   borderBottom: "1px solid var(--border)",
 };
 
@@ -79,104 +107,132 @@ const subHeaderRight: CSSProperties = {
 
 const title: CSSProperties = {
   margin: 0,
-  fontSize: 15,
-  fontWeight: 600,
+  fontFamily: "var(--font-display)",
+  fontSize: 24,
+  fontWeight: 400,
   color: "var(--text)",
-  letterSpacing: -0.2,
+  letterSpacing: 0.5,
 };
 
 const body: CSSProperties = {
   flex: 1,
-  padding: "32px",
+  padding: "40px 32px 64px",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
+  gap: 48,
 };
 
 const section: CSSProperties = {
   width: "100%",
-  maxWidth: 560,
+  maxWidth: 620,
+  display: "flex",
+  flexDirection: "column",
+  gap: 14,
 };
 
-const card: CSSProperties = {
-  maxWidth: 560,
+const sectionHeader: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+};
+
+const sectionKicker: CSSProperties = {
+  fontSize: 10,
+  letterSpacing: 3,
+  textTransform: "uppercase",
+  color: "var(--text-muted)",
+  fontWeight: 700,
+};
+
+const sectionLabel: CSSProperties = {
+  margin: 0,
+  fontFamily: "var(--font-display)",
+  fontSize: 22,
+  color: "var(--text)",
+  letterSpacing: 0.4,
+  lineHeight: 1.1,
+};
+
+const infoCard: CSSProperties = {
   background: "var(--bg-card)",
   border: "1px solid var(--border)",
   borderRadius: 12,
-  padding: 28,
+  padding: 20,
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
 };
 
-const badge: CSSProperties = {
-  display: "inline-block",
-  background: "var(--warning-bg)",
-  color: "var(--warning-text)",
-  border: "1px solid var(--warning-border)",
-  padding: "3px 9px",
-  borderRadius: 999,
+const infoRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 14,
+  padding: "10px 14px",
+  background: "var(--bg-input)",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+};
+
+const infoLabel: CSSProperties = {
   fontSize: 10,
-  fontWeight: 700,
+  letterSpacing: 2,
   textTransform: "uppercase",
-  letterSpacing: 1,
-  marginBottom: 14,
+  color: "var(--text-muted)",
+  fontWeight: 700,
 };
 
-const cardTitle: CSSProperties = {
-  margin: 0,
-  marginBottom: 12,
-  fontSize: 16,
-  fontWeight: 600,
+const infoValueMono: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 12,
   color: "var(--text)",
 };
 
-const cardText: CSSProperties = {
+const infoHelp: CSSProperties = {
   margin: 0,
-  marginBottom: 14,
+  fontSize: 12,
+  color: "var(--text-secondary)",
+  lineHeight: 1.55,
+};
+
+const roadmapCard: CSSProperties = {
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  padding: 24,
+};
+
+const roadmapIntro: CSSProperties = {
+  margin: 0,
+  marginBottom: 16,
   fontSize: 13,
+  color: "var(--text-secondary)",
+  lineHeight: 1.55,
+};
+
+const roadmapList: CSSProperties = {
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+};
+
+const roadmapItem: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  fontSize: 12,
   color: "var(--text-secondary)",
   lineHeight: 1.6,
 };
 
-const list: CSSProperties = {
-  margin: 0,
-  marginBottom: 16,
-  paddingLeft: 18,
-  fontSize: 12,
-  color: "var(--text-secondary)",
-  lineHeight: 1.8,
-};
-
-const infoLine: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "10px 12px",
-  background: "var(--bg-elevated)",
-  border: "1px solid var(--border)",
-  borderRadius: 8,
-  marginBottom: 14,
-  fontSize: 12,
-};
-
-const infoLabel: CSSProperties = {
-  color: "var(--text-muted)",
-  textTransform: "uppercase",
-  fontSize: 10,
-  letterSpacing: 0.7,
-  fontWeight: 600,
-};
-
-const code: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: 12,
-  color: "var(--text)",
-  background: "var(--bg-input)",
-  padding: "2px 8px",
-  borderRadius: 4,
-};
-
-const footerText: CSSProperties = {
-  margin: 0,
-  fontSize: 11,
-  color: "var(--text-muted)",
-  fontStyle: "italic",
+const roadmapBullet: CSSProperties = {
+  width: 6,
+  height: 6,
+  borderRadius: "50%",
+  background: "var(--text-faint)",
+  flexShrink: 0,
 };

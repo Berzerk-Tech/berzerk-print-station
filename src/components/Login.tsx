@@ -1,10 +1,16 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { signInWithGoogle } from "../lib/auth";
 import { BerzerkLogo } from "./BerzerkLogo";
 
 export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState<string>("");
+
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => setVersion(""));
+  }, []);
 
   async function handleClick() {
     setError(null);
@@ -25,52 +31,68 @@ export function Login() {
 
   return (
     <div style={page}>
-      <div style={ambient} aria-hidden="true" />
+      <div style={ambientGrid} aria-hidden="true" />
+      <div style={ambientGlow} aria-hidden="true" />
 
-      <div style={brandStack}>
-        <BerzerkLogo style={logoStyle} />
-        <h1 style={wordmark}>BERZERK</h1>
-        <p style={tagline}>Print Station</p>
-      </div>
-
-      <div style={card}>
-        <p style={cardKicker}>Acesso restrito</p>
-        <p style={cardSub}>
-          Apenas contas <code style={domainTag}>@berzerk.com.br</code>
-        </p>
-
-        {error && <div style={errorBox}>{error}</div>}
-
-        {!busy ? (
-          <button type="button" onClick={handleClick} style={primaryBtn}>
-            <GoogleG />
-            <span>Entrar com Google</span>
-          </button>
-        ) : (
-          <div style={busyStack}>
-            <div style={spinnerWrap}>
-              <Spinner />
-              <span style={spinnerText}>Abrindo o navegador…</span>
-            </div>
-            <p style={busyNote}>
-              Continue o login no navegador.<br />
-              Esta janela voltará automaticamente assim que terminar.
-            </p>
-            <button type="button" onClick={handleCancel} style={cancelBtn}>
-              Cancelar
-            </button>
+      <main style={panel}>
+        <header style={brandStack}>
+          <BerzerkLogo style={logoStyle} />
+          <h1 style={wordmark}>BERZERK</h1>
+          <div style={taglineRow}>
+            <span style={taglineDot} />
+            <span style={tagline}>Print Station</span>
+            <span style={taglineDot} />
           </div>
-        )}
-      </div>
+        </header>
 
-      <p style={versionTag}>v0.1.0 · Berzerk Tech</p>
+        <section style={authSection}>
+          <p style={kicker}>Acesso restrito</p>
+          <p style={cardSub}>
+            Apenas contas <code style={domainTag}>@berzerk.com.br</code>
+          </p>
+
+          {error && <div style={errorBox}>{error}</div>}
+
+          {!busy ? (
+            <button
+              type="button"
+              onClick={handleClick}
+              style={primaryBtn}
+              className="berzerk-login-btn"
+            >
+              <GoogleG />
+              <span>Entrar com Google</span>
+            </button>
+          ) : (
+            <div style={busyStack}>
+              <div style={spinnerWrap}>
+                <Spinner />
+                <span style={spinnerText}>Abrindo o navegador…</span>
+              </div>
+              <p style={busyNote}>
+                Continue o login no navegador.<br />
+                Esta janela voltará automaticamente.
+              </p>
+              <button type="button" onClick={handleCancel} style={cancelBtn}>
+                Cancelar
+              </button>
+            </div>
+          )}
+        </section>
+      </main>
+
+      <footer style={footer}>
+        <span style={footerTag}>v{version || "…"}</span>
+        <span style={footerSep}>·</span>
+        <span style={footerTag}>Berzerk Tech</span>
+      </footer>
     </div>
   );
 }
 
 function Spinner() {
   return (
-    <svg width={20} height={20} viewBox="0 0 20 20" style={{ animation: "berzerk-spin 0.9s linear infinite" }}>
+    <svg width={18} height={18} viewBox="0 0 20 20" style={{ animation: "berzerk-spin 0.9s linear infinite" }}>
       <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="2" />
       <path d="M10 2 a8 8 0 0 1 8 8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
@@ -88,14 +110,14 @@ function GoogleG() {
   );
 }
 
-// Animações precisam de keyframes globais — injeto inline uma vez.
 if (typeof document !== "undefined" && !document.getElementById("berzerk-login-keyframes")) {
   const style = document.createElement("style");
   style.id = "berzerk-login-keyframes";
   style.textContent = `
     @keyframes berzerk-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     @keyframes berzerk-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes berzerk-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.9; } }
+    .berzerk-login-btn:hover { background: var(--bg-card-hover) !important; border-color: var(--border-strong) !important; }
+    .berzerk-login-btn:active { transform: translateY(1px); }
   `;
   document.head.appendChild(style);
 }
@@ -104,75 +126,104 @@ const page: CSSProperties = {
   minHeight: "100vh",
   background: "var(--bg)",
   color: "var(--text)",
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
+  display: "grid",
+  placeItems: "center",
   position: "relative",
   overflow: "hidden",
   padding: "32px",
-  gap: 40,
 };
 
-const ambient: CSSProperties = {
+// Grid técnica sutil — referência industrial / chão de fábrica
+const ambientGrid: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  backgroundImage:
+    "linear-gradient(to right, var(--border) 1px, transparent 1px), linear-gradient(to bottom, var(--border) 1px, transparent 1px)",
+  backgroundSize: "48px 48px",
+  opacity: 0.25,
+  maskImage:
+    "radial-gradient(ellipse 60% 50% at 50% 50%, black 30%, transparent 100%)",
+  WebkitMaskImage:
+    "radial-gradient(ellipse 60% 50% at 50% 50%, black 30%, transparent 100%)",
+  pointerEvents: "none",
+};
+
+// Glow sutil no centro
+const ambientGlow: CSSProperties = {
   position: "absolute",
   inset: 0,
   background:
-    "radial-gradient(80% 50% at 50% 0%, rgba(120, 120, 140, 0.10), transparent 60%), radial-gradient(60% 40% at 50% 100%, rgba(120, 120, 140, 0.06), transparent 70%)",
+    "radial-gradient(ellipse 70% 50% at 50% 40%, var(--bg-elevated), transparent 65%)",
   pointerEvents: "none",
+};
+
+const panel: CSSProperties = {
+  position: "relative",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 48,
+  animation: "berzerk-fade-in 480ms ease-out",
+  padding: "0 16px",
 };
 
 const brandStack: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
-  gap: 4,
-  animation: "berzerk-fade-in 480ms ease-out",
-  position: "relative",
+  gap: 6,
 };
 
 const logoStyle: CSSProperties = {
-  width: 56,
-  height: 60,
+  width: 52,
+  height: 56,
   color: "var(--text)",
-  marginBottom: 10,
+  marginBottom: 8,
 };
 
 const wordmark: CSSProperties = {
   fontFamily: "var(--font-display)",
-  fontSize: 72,
+  fontSize: 76,
   margin: 0,
-  letterSpacing: 1.5,
+  letterSpacing: 2,
   lineHeight: 1,
   color: "var(--text)",
 };
 
+const taglineRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  marginTop: 4,
+};
+
+const taglineDot: CSSProperties = {
+  width: 24,
+  height: 1,
+  background: "var(--border-strong)",
+};
+
 const tagline: CSSProperties = {
-  margin: 0,
-  fontSize: 12,
-  letterSpacing: 4,
+  fontSize: 11,
+  letterSpacing: 5,
   textTransform: "uppercase",
-  color: "var(--text-muted)",
-  fontWeight: 500,
+  color: "var(--text-secondary)",
+  fontWeight: 600,
 };
 
-const card: CSSProperties = {
-  width: 380,
+const authSection: CSSProperties = {
+  width: 360,
   maxWidth: "100%",
-  padding: 32,
-  background: "var(--bg-card)",
-  border: "1px solid var(--border)",
-  borderRadius: 16,
-  position: "relative",
-  animation: "berzerk-fade-in 600ms ease-out 120ms backwards",
-  boxShadow:
-    "0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 20px 60px -20px rgba(0, 0, 0, 0.6)",
+  textAlign: "center",
+  display: "flex",
+  flexDirection: "column",
+  gap: 0,
 };
 
-const cardKicker: CSSProperties = {
+const kicker: CSSProperties = {
   margin: 0,
   fontSize: 10,
-  letterSpacing: 1.5,
+  letterSpacing: 2,
   textTransform: "uppercase",
   color: "var(--text-muted)",
   fontWeight: 700,
@@ -180,8 +231,8 @@ const cardKicker: CSSProperties = {
 
 const cardSub: CSSProperties = {
   margin: 0,
-  marginTop: 6,
-  marginBottom: 22,
+  marginTop: 8,
+  marginBottom: 24,
   fontSize: 14,
   color: "var(--text-secondary)",
 };
@@ -190,7 +241,7 @@ const domainTag: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 12,
   background: "var(--bg-input)",
-  padding: "1px 6px",
+  padding: "2px 7px",
   borderRadius: 4,
   color: "var(--text)",
   border: "1px solid var(--border)",
@@ -198,26 +249,27 @@ const domainTag: CSSProperties = {
 
 const primaryBtn: CSSProperties = {
   width: "100%",
-  padding: "13px 16px",
+  padding: "14px 20px",
   fontSize: 14,
   fontWeight: 600,
   border: "1px solid var(--border-strong)",
-  borderRadius: 10,
-  background: "var(--bg-input)",
+  borderRadius: 12,
+  background: "var(--bg-card)",
   color: "var(--text)",
   cursor: "pointer",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  gap: 10,
-  transition: "background 120ms, border-color 120ms, transform 120ms",
+  gap: 12,
+  transition: "background 120ms, border-color 120ms, transform 80ms",
+  boxShadow: "0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 4px 16px -8px rgba(0, 0, 0, 0.25)",
 };
 
 const busyStack: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   alignItems: "stretch",
-  gap: 14,
+  gap: 16,
   animation: "berzerk-fade-in 200ms ease-out",
 };
 
@@ -226,7 +278,7 @@ const spinnerWrap: CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   gap: 10,
-  padding: "12px",
+  padding: "10px",
   color: "var(--text-secondary)",
 };
 
@@ -240,7 +292,7 @@ const busyNote: CSSProperties = {
   fontSize: 12,
   textAlign: "center",
   color: "var(--text-muted)",
-  lineHeight: 1.55,
+  lineHeight: 1.6,
 };
 
 const cancelBtn: CSSProperties = {
@@ -263,14 +315,20 @@ const errorBox: CSSProperties = {
   fontSize: 12,
   marginBottom: 14,
   lineHeight: 1.5,
+  textAlign: "left",
 };
 
-const versionTag: CSSProperties = {
+const footer: CSSProperties = {
   position: "absolute",
   bottom: 24,
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
   fontSize: 11,
   color: "var(--text-faint)",
-  letterSpacing: 1,
-  margin: 0,
   fontFamily: "var(--font-mono)",
+  letterSpacing: 1,
 };
+
+const footerTag: CSSProperties = {};
+const footerSep: CSSProperties = { opacity: 0.5 };
