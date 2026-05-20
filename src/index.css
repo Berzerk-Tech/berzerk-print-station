@@ -55,7 +55,7 @@
   --pill-missing-text: #f87171;
 
   /* Ambient — grade técnica + glow sutil aplicados via AmbientBackground */
-  --grid-line: rgba(255, 255, 255, 0.06);
+  --grid-line: rgba(255, 255, 255, 0.025);
   --ambient-glow: rgba(255, 255, 255, 0.025);
 
   /* Typography */
@@ -85,8 +85,8 @@
   --border-strong: #b8b3a3;
   --border-focus: #71717a;
 
-  /* Ambient — em light: grid técnico mais visível, glow neutro */
-  --grid-line: rgba(40, 30, 10, 0.09);
+  /* Ambient — em light: grid sutil, glow neutro de paper */
+  --grid-line: rgba(40, 30, 10, 0.04);
   --ambient-glow: rgba(255, 250, 230, 0.5);
 
   /* Primary action (black on light) */
