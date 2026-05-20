@@ -13,6 +13,7 @@ import {
   type RfidReader,
 } from "../lib/devices";
 import { pingItag, type ConnectionStatus } from "../lib/rfid";
+import { listSerialPorts, describePort, type SerialPortInfo } from "../lib/usb";
 
 type Props = { onBack: () => void };
 
@@ -90,10 +91,50 @@ function PrinterCard({
   const [draft, setDraft] = useState<ThermalPrinter>(() =>
     printer ?? { name: "", deviceId: "", model: "unknown" },
   );
+  const [ports, setPorts] = useState<SerialPortInfo[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   useEffect(() => {
     if (printer) setDraft(printer);
   }, [printer]);
+
+  useEffect(() => {
+    if (editing) {
+      void rescanPorts();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
+  async function rescanPorts() {
+    setScanning(true);
+    setScanError(null);
+    try {
+      const found = await listSerialPorts();
+      setPorts(found);
+      // Se draft.deviceId ainda vazio e tem só 1 porta, sugere ela
+      if (!draft.deviceId && found.length === 1) {
+        setDraft((d) => ({
+          ...d,
+          deviceId: found[0].name,
+          name: d.name || found[0].product || found[0].name,
+        }));
+      }
+    } catch (err) {
+      setScanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  function selectPort(port: SerialPortInfo) {
+    setDraft((d) => ({
+      ...d,
+      deviceId: port.name,
+      // Auto-preenche nome se vazio, baseado no product/manufacturer
+      name: d.name || port.product || port.manufacturer || port.name,
+    }));
+  }
 
   if (!editing && printer) {
     return (
@@ -137,24 +178,71 @@ function PrinterCard({
 
   return (
     <div style={configCard}>
-      {!printer && (
-        <p style={emptyHint}>
-          Nenhuma impressora configurada. Em breve a detecção via USB será automática —
-          por agora preencha manualmente abaixo.
-        </p>
-      )}
+      <Field
+        label="Dispositivo USB"
+        hint={`${ports.length} ${ports.length === 1 ? "dispositivo detectado" : "dispositivos detectados"}`}
+      >
+        <div style={portList}>
+          {scanning && ports.length === 0 ? (
+            <div style={portEmpty}>Procurando portas seriais…</div>
+          ) : ports.length === 0 ? (
+            <div style={portEmpty}>
+              Nenhum dispositivo serial detectado. Conecte a impressora via USB e
+              clique em "Atualizar lista".
+            </div>
+          ) : (
+            ports.map((port) => {
+              const selected = draft.deviceId === port.name;
+              return (
+                <button
+                  type="button"
+                  key={port.name}
+                  onClick={() => selectPort(port)}
+                  style={{
+                    ...portOption,
+                    background: selected ? "var(--bg-card-hover)" : "var(--bg-input)",
+                    borderColor: selected ? "var(--border-strong)" : "var(--border)",
+                  }}
+                  className="berzerk-port-option"
+                >
+                  <div style={portInfo}>
+                    <span style={portName}>{describePort(port)}</span>
+                    {port.vid && port.pid && (
+                      <span style={portVidPid}>
+                        VID:PID {port.vid}:{port.pid}
+                        {port.serial_number ? ` · SN ${port.serial_number}` : ""}
+                      </span>
+                    )}
+                  </div>
+                  {selected && <span style={portCheck}>✓</span>}
+                </button>
+              );
+            })
+          )}
+          {scanError && <div style={portError}>{scanError}</div>}
+          <button
+            type="button"
+            onClick={rescanPorts}
+            disabled={scanning}
+            style={btnGhost}
+            className="berzerk-btn-ghost"
+          >
+            {scanning ? "Procurando…" : "↻ Atualizar lista"}
+          </button>
+        </div>
+      </Field>
 
-      <Field label="Nome" hint="Ex: Bobina 01 / Esquerda">
+      <Field label="Apelido" hint="Como esse dispositivo vai aparecer pra você">
         <input
           style={input}
           className="berzerk-input"
           value={draft.name}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          placeholder="Bobina 01"
+          placeholder="Bobina 01 / Esquerda"
         />
       </Field>
 
-      <Field label="Modelo" hint="Define o protocolo (ESC/POS, ZPL, etc)">
+      <Field label="Modelo / Protocolo" hint="ESC/POS funciona pra maioria das impressoras térmicas">
         <select
           style={input}
           className="berzerk-input"
@@ -169,16 +257,6 @@ function PrinterCard({
             </option>
           ))}
         </select>
-      </Field>
-
-      <Field label="Identificador (porta COM ou USB)" hint="Ex: COM3 ou 0483:5740">
-        <input
-          style={input}
-          className="berzerk-input"
-          value={draft.deviceId}
-          onChange={(e) => setDraft({ ...draft, deviceId: e.target.value })}
-          placeholder="COM3"
-        />
       </Field>
 
       <div style={cardActions}>
@@ -289,7 +367,7 @@ function ReaderCard({
 
       <Field
         label="Endereço do iTAG Monitor"
-        hint="O Print Station fala HTTP direto — sem proxy"
+        hint="O Loom fala HTTP direto — sem proxy"
       >
         <div style={inputWithButton}>
           <input
@@ -438,11 +516,10 @@ const subHeaderRight: CSSProperties = { gridColumn: "3" };
 
 const title: CSSProperties = {
   margin: 0,
-  fontFamily: "var(--font-display)",
-  fontSize: 24,
-  fontWeight: 400,
+  fontSize: 17,
+  fontWeight: 600,
   color: "var(--text)",
-  letterSpacing: 0.5,
+  letterSpacing: -0.1,
 };
 
 const body: CSSProperties = {
@@ -479,11 +556,11 @@ const sectionKicker: CSSProperties = {
 
 const sectionLabel: CSSProperties = {
   margin: 0,
-  fontFamily: "var(--font-display)",
-  fontSize: 22,
+  fontSize: 18,
+  fontWeight: 700,
   color: "var(--text)",
-  letterSpacing: 0.4,
-  lineHeight: 1.1,
+  letterSpacing: -0.2,
+  lineHeight: 1.2,
 };
 
 const configCard: CSSProperties = {
@@ -595,6 +672,68 @@ const inputWithButton: CSSProperties = {
   display: "flex",
   gap: 8,
   alignItems: "stretch",
+};
+
+const portList: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const portEmpty: CSSProperties = {
+  padding: "14px 16px",
+  background: "var(--bg-input)",
+  border: "1px dashed var(--border)",
+  borderRadius: 8,
+  fontSize: 12,
+  color: "var(--text-muted)",
+  textAlign: "center",
+};
+
+const portOption: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "10px 14px",
+  border: "1px solid",
+  borderRadius: 8,
+  cursor: "pointer",
+  textAlign: "left",
+  fontFamily: "inherit",
+  transition: "background 120ms, border-color 120ms",
+};
+
+const portInfo: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+};
+
+const portName: CSSProperties = {
+  fontSize: 13,
+  color: "var(--text)",
+  fontWeight: 600,
+};
+
+const portVidPid: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  color: "var(--text-muted)",
+};
+
+const portCheck: CSSProperties = {
+  color: "var(--text)",
+  fontSize: 16,
+  fontWeight: 700,
+};
+
+const portError: CSSProperties = {
+  padding: "10px 14px",
+  background: "var(--danger-bg)",
+  color: "var(--danger-text)",
+  border: "1px solid var(--danger-border)",
+  borderRadius: 8,
+  fontSize: 12,
 };
 
 const testBox: CSSProperties = {
@@ -716,16 +855,6 @@ const btnDanger: CSSProperties = {
   color: "var(--text-muted)",
 };
 
-const emptyHint: CSSProperties = {
-  margin: 0,
-  fontSize: 12,
-  lineHeight: 1.55,
-  padding: "10px 12px",
-  background: "var(--warning-bg)",
-  color: "var(--warning-text)",
-  border: "1px solid var(--warning-border)",
-  borderRadius: 8,
-};
 
 const infoCard: CSSProperties = {
   background: "var(--bg-card)",

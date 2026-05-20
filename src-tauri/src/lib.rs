@@ -1,5 +1,6 @@
 mod itag_client;
 mod oauth_loopback;
+mod usb_devices;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,6 +14,7 @@ pub fn run() {
             itag_client::itag_send_command,
             itag_client::itag_poll_tags,
             itag_client::itag_reinventory,
+            usb_devices::list_serial_ports,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
