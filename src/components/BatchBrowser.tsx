@@ -354,13 +354,13 @@ export function BatchBrowser({
 
   return (
     <div style={page}>
-      <AmbientBackground />
+      <AmbientBackground variant="flat" />
       <header style={subHeader}>
         <div style={subHeaderLeft}>
           <BackButton onClick={onBack} />
         </div>
         <div style={subHeaderCenter}>
-          <h2 style={subHeaderTitle}>Imprimir RFID</h2>
+          <h2 style={subHeaderTitle}>Etiquetagem</h2>
           <div style={searchWrap}>
             <svg
               viewBox="0 0 24 24"
@@ -841,8 +841,7 @@ const subHeader: CSSProperties = {
   alignItems: "center",
   padding: "22px 40px",
   borderBottom: "1px solid var(--border)",
-  background: "color-mix(in srgb, var(--bg) 88%, transparent)",
-  backdropFilter: "blur(8px)",
+  background: "var(--bg)",
   position: "sticky",
   top: 0,
   zIndex: 5,

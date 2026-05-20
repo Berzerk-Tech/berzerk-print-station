@@ -111,15 +111,15 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
 
         <div style={cardsGrid}>
           <ModuleCard
-            label="Imprimir RFID"
-            description="Browse de lotes confirmados, lookup de EAN13 (local + Shopify), impressão com margem de segurança"
+            label="Etiquetagem"
+            description="Aplicar identidade RFID em lotes de produção — lookup de EAN13 (local + Shopify) e impressão com margem de segurança"
             icon={<IconTag style={moduleIcon} />}
             onClick={() => onEnter("rfid")}
             status="ready"
           />
           <ModuleCard
-            label="Impressão de NF"
-            description="Bipar etiqueta RFID, identificar pedido, imprimir DANFE automática"
+            label="Expedição"
+            description="Bipar etiqueta RFID, identificar pedido pronto e imprimir DANFE automática"
             icon={<IconReceipt style={moduleIcon} />}
             onClick={() => onEnter("nf")}
             status="coming-soon"
@@ -313,8 +313,6 @@ const topBar: CSSProperties = {
   padding: "18px 32px",
   borderBottom: "1px solid var(--border)",
   gap: 16,
-  background: "color-mix(in srgb, var(--bg) 85%, transparent)",
-  backdropFilter: "blur(8px)",
 };
 
 const topLeft: CSSProperties = {

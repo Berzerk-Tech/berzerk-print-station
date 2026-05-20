@@ -1,17 +1,29 @@
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { BackButton } from "./BackButton";
 import { UpdateChecker } from "./UpdateChecker";
 import { AmbientBackground } from "./AmbientBackground";
 import { getStationId } from "../lib/station";
+import {
+  getDeviceConfig,
+  setPrinter,
+  setReader,
+  PRINTER_MODELS,
+  READER_MODES,
+  type ThermalPrinter,
+  type RfidReader,
+} from "../lib/devices";
 
 type Props = { onBack: () => void };
 
 export function SettingsPlaceholder({ onBack }: Props) {
   const stationId = getStationId();
+  const [config, setConfig] = useState(() => getDeviceConfig());
+
+  const refresh = () => setConfig(getDeviceConfig());
 
   return (
     <div style={page}>
-      <AmbientBackground />
+      <AmbientBackground variant="flat" />
 
       <header style={subHeader}>
         <div style={subHeaderLeft}>
@@ -22,6 +34,23 @@ export function SettingsPlaceholder({ onBack }: Props) {
       </header>
 
       <main style={body}>
+        <div style={section}>
+          <SectionHeader kicker="Dispositivos" label="Impressora térmica" />
+          <PrinterCard
+            printer={config.printer}
+            onSave={(p) => { setPrinter(p); refresh(); }}
+            onClear={() => { setPrinter(null); refresh(); }}
+          />
+        </div>
+
+        <div style={section}>
+          <SectionHeader kicker="Dispositivos" label="Leitor RFID" />
+          <ReaderCard
+            reader={config.reader}
+            onSave={(r) => { setReader(r); refresh(); }}
+          />
+        </div>
+
         <div style={section}>
           <SectionHeader kicker="Sistema" label="Atualizações" />
           <UpdateChecker />
@@ -40,29 +69,235 @@ export function SettingsPlaceholder({ onBack }: Props) {
             </p>
           </div>
         </div>
-
-        <div style={section}>
-          <SectionHeader kicker="Roadmap" label="Configurações futuras" />
-          <div style={roadmapCard}>
-            <p style={roadmapIntro}>
-              Por enquanto a maioria dessas configs vive em arquivo/env. Conforme o fluxo
-              principal amadurece, vão migrar pra esta tela:
-            </p>
-            <ul style={roadmapList}>
-              <RoadmapItem text="Impressora RFID — porta USB / IP / status" />
-              <RoadmapItem text="Leitor RFID local — host do proxy HTTPS" />
-              <RoadmapItem text="iTAG cloud endpoint + credenciais (read-only)" />
-              <RoadmapItem text="Margem de segurança default (atalho pro modo / valor padrão)" />
-              <RoadmapItem text="Estação — opção de regenerar ID (cuidado: muda histórico)" />
-              <RoadmapItem text="Tema e fullscreen no boot (auto-aplicar)" />
-              <RoadmapItem text="Log de atividade — últimas N ações pra debug" />
-            </ul>
-          </div>
-        </div>
       </main>
     </div>
   );
 }
+
+// === Printer Card ===
+
+function PrinterCard({
+  printer,
+  onSave,
+  onClear,
+}: {
+  printer: ThermalPrinter | null;
+  onSave: (p: ThermalPrinter) => void;
+  onClear: () => void;
+}) {
+  const [editing, setEditing] = useState(!printer);
+  const [draft, setDraft] = useState<ThermalPrinter>(() =>
+    printer ?? { name: "", deviceId: "", model: "unknown" },
+  );
+
+  useEffect(() => {
+    if (printer) setDraft(printer);
+  }, [printer]);
+
+  if (!editing && printer) {
+    return (
+      <div style={configCard}>
+        <div style={configRow}>
+          <div style={configMeta}>
+            <span style={configLabel}>Modelo</span>
+            <code style={configValueMono}>
+              {PRINTER_MODELS.find((m) => m.value === printer.model)?.label ?? printer.model}
+            </code>
+          </div>
+          <span style={pillReady}>
+            <span style={pillDotReady} /> Configurada
+          </span>
+        </div>
+        <div style={configRow}>
+          <div style={configMeta}>
+            <span style={configLabel}>Nome</span>
+            <span style={configValue}>{printer.name}</span>
+          </div>
+        </div>
+        <div style={configRow}>
+          <div style={configMeta}>
+            <span style={configLabel}>Identificador</span>
+            <code style={configValueMono}>{printer.deviceId}</code>
+          </div>
+        </div>
+        <div style={cardActions}>
+          <button type="button" style={btnGhost} className="berzerk-btn-ghost" onClick={() => setEditing(true)}>
+            Editar
+          </button>
+          <button type="button" style={btnDanger} className="berzerk-btn-danger" onClick={onClear}>
+            Remover
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const canSave = draft.name.trim() && draft.deviceId.trim();
+
+  return (
+    <div style={configCard}>
+      {!printer && (
+        <p style={emptyHint}>
+          Nenhuma impressora configurada. Em breve a detecção via USB será automática —
+          por agora preencha manualmente abaixo.
+        </p>
+      )}
+
+      <Field label="Nome" hint="Ex: Bobina 01 / Esquerda">
+        <input
+          style={input}
+          className="berzerk-input"
+          value={draft.name}
+          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          placeholder="Bobina 01"
+        />
+      </Field>
+
+      <Field label="Modelo" hint="Define o protocolo (ESC/POS, ZPL, etc)">
+        <select
+          style={input}
+          className="berzerk-input"
+          value={draft.model}
+          onChange={(e) =>
+            setDraft({ ...draft, model: e.target.value as ThermalPrinter["model"] })
+          }
+        >
+          {PRINTER_MODELS.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="Identificador (porta COM ou USB)" hint="Ex: COM3 ou 0483:5740">
+        <input
+          style={input}
+          className="berzerk-input"
+          value={draft.deviceId}
+          onChange={(e) => setDraft({ ...draft, deviceId: e.target.value })}
+          placeholder="COM3"
+        />
+      </Field>
+
+      <div style={cardActions}>
+        {printer && (
+          <button
+            type="button"
+            style={btnGhost}
+            className="berzerk-btn-ghost"
+            onClick={() => {
+              setDraft(printer);
+              setEditing(false);
+            }}
+          >
+            Cancelar
+          </button>
+        )}
+        <button
+          type="button"
+          style={canSave ? btnPrimary : btnDisabled}
+          className={canSave ? "berzerk-btn-primary" : ""}
+          disabled={!canSave}
+          onClick={() => {
+            onSave(draft);
+            setEditing(false);
+          }}
+        >
+          Salvar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// === Reader Card ===
+
+function ReaderCard({
+  reader,
+  onSave,
+}: {
+  reader: RfidReader;
+  onSave: (r: RfidReader) => void;
+}) {
+  const [draft, setDraft] = useState(reader);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(reader);
+
+  return (
+    <div style={configCard}>
+      <Field label="Modo de conexão" hint="Como o app fala com o leitor RFID">
+        <div style={radioGroup}>
+          {READER_MODES.map((mode) => (
+            <label
+              key={mode.value}
+              style={{
+                ...radioOption,
+                opacity: mode.available ? 1 : 0.5,
+                cursor: mode.available ? "pointer" : "not-allowed",
+              }}
+            >
+              <input
+                type="radio"
+                name="reader-mode"
+                checked={draft.mode === mode.value}
+                disabled={!mode.available}
+                onChange={() => setDraft({ ...draft, mode: mode.value })}
+                style={radio}
+              />
+              <span style={radioBody}>
+                <span style={radioLabel}>{mode.label}</span>
+                <span style={radioDesc}>{mode.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </Field>
+
+      {draft.mode === "via-proxy" && (
+        <Field label="Endereço do proxy HTTPS" hint="rfid-proxy rodando no PC">
+          <input
+            style={input}
+            className="berzerk-input"
+            value={draft.proxyHost}
+            onChange={(e) => setDraft({ ...draft, proxyHost: e.target.value })}
+          />
+        </Field>
+      )}
+
+      <Field label="Endereço do iTAG Monitor" hint="App desktop Windows que conversa com o leitor">
+        <input
+          style={input}
+          className="berzerk-input"
+          value={draft.itagHost}
+          onChange={(e) => setDraft({ ...draft, itagHost: e.target.value })}
+        />
+      </Field>
+
+      {dirty && (
+        <div style={cardActions}>
+          <button
+            type="button"
+            style={btnGhost}
+            className="berzerk-btn-ghost"
+            onClick={() => setDraft(reader)}
+          >
+            Descartar
+          </button>
+          <button
+            type="button"
+            style={btnPrimary}
+            className="berzerk-btn-primary"
+            onClick={() => onSave(draft)}
+          >
+            Salvar alterações
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// === Helpers ===
 
 function SectionHeader({ kicker, label }: { kicker: string; label: string }) {
   return (
@@ -73,14 +308,51 @@ function SectionHeader({ kicker, label }: { kicker: string; label: string }) {
   );
 }
 
-function RoadmapItem({ text }: { text: string }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <li style={roadmapItem}>
-      <span style={roadmapBullet} />
-      <span>{text}</span>
-    </li>
+    <div style={field}>
+      <div style={fieldHead}>
+        <span style={fieldLabel}>{label}</span>
+        {hint && <span style={fieldHint}>{hint}</span>}
+      </div>
+      {children}
+    </div>
   );
 }
+
+// === Hover CSS ===
+
+if (typeof document !== "undefined" && !document.getElementById("berzerk-settings-styles")) {
+  const style = document.createElement("style");
+  style.id = "berzerk-settings-styles";
+  style.textContent = `
+    .berzerk-input:focus {
+      outline: none;
+      border-color: var(--border-focus) !important;
+    }
+    .berzerk-btn-primary:hover { background: var(--accent-hover) !important; }
+    .berzerk-btn-ghost:hover {
+      background: var(--bg-card-hover) !important;
+      border-color: var(--border-strong) !important;
+    }
+    .berzerk-btn-danger:hover {
+      background: var(--danger-bg) !important;
+      color: var(--danger-text) !important;
+      border-color: var(--danger-border) !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+// === Styles ===
 
 const page: CSSProperties = {
   minHeight: "100vh",
@@ -100,16 +372,11 @@ const subHeader: CSSProperties = {
   gap: 18,
   padding: "20px 40px",
   borderBottom: "1px solid var(--border)",
+  background: "var(--bg)",
 };
 
-const subHeaderLeft: CSSProperties = {
-  gridColumn: "1",
-  justifySelf: "start",
-};
-
-const subHeaderRight: CSSProperties = {
-  gridColumn: "3",
-};
+const subHeaderLeft: CSSProperties = { gridColumn: "1", justifySelf: "start" };
+const subHeaderRight: CSSProperties = { gridColumn: "3" };
 
 const title: CSSProperties = {
   margin: 0,
@@ -123,7 +390,7 @@ const title: CSSProperties = {
 const body: CSSProperties = {
   position: "relative",
   flex: 1,
-  padding: "40px 32px 64px",
+  padding: "40px 32px 80px",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
@@ -159,6 +426,207 @@ const sectionLabel: CSSProperties = {
   color: "var(--text)",
   letterSpacing: 0.4,
   lineHeight: 1.1,
+};
+
+const configCard: CSSProperties = {
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  padding: 22,
+  display: "flex",
+  flexDirection: "column",
+  gap: 16,
+};
+
+const configRow: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 16,
+};
+
+const configMeta: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+};
+
+const configLabel: CSSProperties = {
+  fontSize: 10,
+  letterSpacing: 2,
+  textTransform: "uppercase",
+  color: "var(--text-muted)",
+  fontWeight: 700,
+};
+
+const configValue: CSSProperties = {
+  fontSize: 14,
+  color: "var(--text)",
+};
+
+const configValueMono: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 13,
+  color: "var(--text)",
+};
+
+const pillReady: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 7,
+  padding: "4px 10px",
+  background: "var(--success-bg)",
+  color: "var(--success-text)",
+  border: "1px solid var(--success-border)",
+  borderRadius: 999,
+  fontSize: 10,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: 1.2,
+  alignSelf: "flex-start",
+};
+
+const pillDotReady: CSSProperties = {
+  width: 6,
+  height: 6,
+  borderRadius: "50%",
+  background: "var(--success-dot)",
+};
+
+const field: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const fieldHead: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: 10,
+};
+
+const fieldLabel: CSSProperties = {
+  fontSize: 11,
+  letterSpacing: 1.5,
+  textTransform: "uppercase",
+  color: "var(--text-muted)",
+  fontWeight: 700,
+};
+
+const fieldHint: CSSProperties = {
+  fontSize: 11,
+  color: "var(--text-faint)",
+  fontStyle: "italic",
+};
+
+const input: CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  fontSize: 13,
+  fontFamily: "var(--font-mono)",
+  background: "var(--bg-input)",
+  color: "var(--text)",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  boxSizing: "border-box",
+  transition: "border-color 120ms",
+};
+
+const radioGroup: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+};
+
+const radioOption: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 10,
+  padding: "10px 12px",
+  background: "var(--bg-input)",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+};
+
+const radio: CSSProperties = {
+  marginTop: 3,
+  accentColor: "var(--text)",
+};
+
+const radioBody: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  flex: 1,
+};
+
+const radioLabel: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: "var(--text)",
+};
+
+const radioDesc: CSSProperties = {
+  fontSize: 11,
+  color: "var(--text-muted)",
+};
+
+const cardActions: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  justifyContent: "flex-end",
+};
+
+const btnPrimary: CSSProperties = {
+  padding: "9px 16px",
+  fontSize: 12,
+  fontWeight: 700,
+  border: 0,
+  borderRadius: 8,
+  background: "var(--accent)",
+  color: "var(--accent-text)",
+  cursor: "pointer",
+  textTransform: "uppercase",
+  letterSpacing: 1,
+  transition: "background 120ms",
+};
+
+const btnDisabled: CSSProperties = {
+  ...btnPrimary,
+  background: "var(--bg-input)",
+  color: "var(--text-muted)",
+  cursor: "not-allowed",
+};
+
+const btnGhost: CSSProperties = {
+  padding: "9px 14px",
+  fontSize: 12,
+  fontWeight: 600,
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  background: "transparent",
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+  textTransform: "uppercase",
+  letterSpacing: 1,
+  transition: "background 120ms, color 120ms, border-color 120ms",
+};
+
+const btnDanger: CSSProperties = {
+  ...btnGhost,
+  color: "var(--text-muted)",
+};
+
+const emptyHint: CSSProperties = {
+  margin: 0,
+  fontSize: 12,
+  lineHeight: 1.55,
+  padding: "10px 12px",
+  background: "var(--warning-bg)",
+  color: "var(--warning-text)",
+  border: "1px solid var(--warning-border)",
+  borderRadius: 8,
 };
 
 const infoCard: CSSProperties = {
@@ -201,45 +669,4 @@ const infoHelp: CSSProperties = {
   fontSize: 12,
   color: "var(--text-secondary)",
   lineHeight: 1.55,
-};
-
-const roadmapCard: CSSProperties = {
-  background: "var(--bg-card)",
-  border: "1px solid var(--border)",
-  borderRadius: 12,
-  padding: 24,
-};
-
-const roadmapIntro: CSSProperties = {
-  margin: 0,
-  marginBottom: 16,
-  fontSize: 13,
-  color: "var(--text-secondary)",
-  lineHeight: 1.55,
-};
-
-const roadmapList: CSSProperties = {
-  margin: 0,
-  padding: 0,
-  listStyle: "none",
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-};
-
-const roadmapItem: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 12,
-  fontSize: 12,
-  color: "var(--text-secondary)",
-  lineHeight: 1.6,
-};
-
-const roadmapBullet: CSSProperties = {
-  width: 6,
-  height: 6,
-  borderRadius: "50%",
-  background: "var(--text-faint)",
-  flexShrink: 0,
 };
