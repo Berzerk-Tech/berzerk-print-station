@@ -61,7 +61,7 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
           <div style={topBrand}>
             <span style={topWordmark}>BERZERK</span>
             <span style={topDivider} />
-            <span style={topProduct}>Loom</span>
+            <span style={topProduct}>RFID</span>
           </div>
         </div>
         <div style={topRight}>

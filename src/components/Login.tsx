@@ -40,7 +40,7 @@ export function Login() {
           <h1 style={wordmark}>BERZERK</h1>
           <div style={taglineRow}>
             <span style={taglineDot} />
-            <span style={tagline}>Loom</span>
+            <span style={tagline}>RFID</span>
             <span style={taglineDot} />
           </div>
         </header>

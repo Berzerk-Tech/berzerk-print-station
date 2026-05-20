@@ -367,7 +367,7 @@ function ReaderCard({
 
       <Field
         label="Endereço do iTAG Monitor"
-        hint="O Loom fala HTTP direto — sem proxy"
+        hint="App fala HTTP direto — sem proxy"
       >
         <div style={inputWithButton}>
           <input
