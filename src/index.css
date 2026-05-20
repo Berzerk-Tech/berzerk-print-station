@@ -54,6 +54,10 @@
   --pill-missing-bg: rgba(239, 68, 68, 0.12);
   --pill-missing-text: #f87171;
 
+  /* Ambient — grade técnica + glow sutil aplicados via AmbientBackground */
+  --grid-line: rgba(255, 255, 255, 0.04);
+  --ambient-glow: rgba(255, 255, 255, 0.025);
+
   /* Typography */
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -63,12 +67,12 @@
 }
 
 :root[data-theme="light"] {
-  /* Surfaces */
-  --bg: #fafafa;
-  --bg-elevated: #ffffff;
+  /* Surfaces — tom levemente off-white tipo papel técnico industrial */
+  --bg: #f5f3ee;
+  --bg-elevated: #fbfaf6;
   --bg-card: #ffffff;
-  --bg-card-hover: #f4f4f5;
-  --bg-input: #f4f4f5;
+  --bg-card-hover: #f0ede5;
+  --bg-input: #ebe8df;
 
   /* Text */
   --text: #18181b;
@@ -77,9 +81,13 @@
   --text-faint: #a1a1aa;
 
   /* Borders */
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
+  --border: #d6d2c5;
+  --border-strong: #b8b3a3;
   --border-focus: #71717a;
+
+  /* Ambient — em light: grid técnico mais visível, glow neutro */
+  --grid-line: rgba(40, 30, 10, 0.06);
+  --ambient-glow: rgba(255, 250, 230, 0.5);
 
   /* Primary action (black on light) */
   --accent: #18181b;

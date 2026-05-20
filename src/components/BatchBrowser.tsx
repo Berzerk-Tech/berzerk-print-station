@@ -24,6 +24,7 @@ import {
 import { BatchCard, type CardState } from "./BatchCard";
 import { PrintConfirmModal } from "./PrintConfirmModal";
 import { BackButton } from "./BackButton";
+import { AmbientBackground } from "./AmbientBackground";
 
 const MAX_VISIBLE = 50;
 // Concorrência baixa pra não estourar rate limit do shopify-analytics.
@@ -353,6 +354,7 @@ export function BatchBrowser({
 
   return (
     <div style={page}>
+      <AmbientBackground />
       <header style={subHeader}>
         <div style={subHeaderLeft}>
           <BackButton onClick={onBack} />
@@ -829,6 +831,7 @@ const page: CSSProperties = {
   color: "var(--text)",
   display: "flex",
   flexDirection: "column",
+  position: "relative",
 };
 
 const subHeader: CSSProperties = {
@@ -838,7 +841,8 @@ const subHeader: CSSProperties = {
   alignItems: "center",
   padding: "22px 40px",
   borderBottom: "1px solid var(--border)",
-  background: "var(--bg)",
+  background: "color-mix(in srgb, var(--bg) 88%, transparent)",
+  backdropFilter: "blur(8px)",
   position: "sticky",
   top: 0,
   zIndex: 5,
@@ -944,6 +948,7 @@ const refreshBtnBusy: CSSProperties = {
 };
 
 const main: CSSProperties = {
+  position: "relative",
   flex: 1,
   padding: "28px 40px",
   maxWidth: 1280,

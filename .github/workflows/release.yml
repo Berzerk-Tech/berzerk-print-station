@@ -37,9 +37,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD intencionalmente omitido: a chave foi
-          # gerada sem senha. Setar como "" confunde o Tauri e ele pula a assinatura,
-          # gerando só o .exe sem o .sig/.nsis.zip que o updater precisa.
+          # A CLI do Tauri gera chave SEMPRE encriptada (mesmo com --password "")
+          # — header "rsign encrypted secret key". Pra descriptografar a chave em
+          # tempo de build, Tauri precisa da var de senha SETADA, mesmo que vazia.
+          # Sem ela: Tauri pula signing silenciosamente → sem .sig/.nsis.zip →
+          # tauri-action loga "Signature not found for the updater JSON".
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
         with:

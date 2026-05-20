@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { signInWithGoogle } from "../lib/auth";
 import { BerzerkLogo } from "./BerzerkLogo";
+import { AmbientBackground } from "./AmbientBackground";
 
 export function Login() {
   const [error, setError] = useState<string | null>(null);
@@ -31,8 +32,7 @@ export function Login() {
 
   return (
     <div style={page}>
-      <div style={ambientGrid} aria-hidden="true" />
-      <div style={ambientGlow} aria-hidden="true" />
+      <AmbientBackground />
 
       <main style={panel}>
         <header style={brandStack}>
@@ -131,30 +131,6 @@ const page: CSSProperties = {
   position: "relative",
   overflow: "hidden",
   padding: "32px",
-};
-
-// Grid técnica sutil — referência industrial / chão de fábrica
-const ambientGrid: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  backgroundImage:
-    "linear-gradient(to right, var(--border) 1px, transparent 1px), linear-gradient(to bottom, var(--border) 1px, transparent 1px)",
-  backgroundSize: "48px 48px",
-  opacity: 0.25,
-  maskImage:
-    "radial-gradient(ellipse 60% 50% at 50% 50%, black 30%, transparent 100%)",
-  WebkitMaskImage:
-    "radial-gradient(ellipse 60% 50% at 50% 50%, black 30%, transparent 100%)",
-  pointerEvents: "none",
-};
-
-// Glow sutil no centro
-const ambientGlow: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  background:
-    "radial-gradient(ellipse 70% 50% at 50% 40%, var(--bg-elevated), transparent 65%)",
-  pointerEvents: "none",
 };
 
 const panel: CSSProperties = {

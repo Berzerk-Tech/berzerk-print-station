@@ -9,6 +9,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { supabase } from "../lib/supabase";
 import { getStoredTheme, setTheme, type Theme } from "../lib/theme";
 import { BerzerkLogo } from "./BerzerkLogo";
+import { AmbientBackground } from "./AmbientBackground";
 
 export type Screen = "home" | "rfid" | "nf" | "settings";
 
@@ -52,7 +53,7 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
 
   return (
     <div style={page}>
-      <div style={ambientGrid} aria-hidden="true" />
+      <AmbientBackground />
 
       <header style={topBar}>
         <div style={topLeft}>
@@ -64,7 +65,13 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
           </div>
         </div>
         <div style={topRight}>
-          <StatusPill dot label={`Estação ${stationShortId}`} />
+          <span style={topUser}>{email}</span>
+          <span style={topPipe} />
+          <span style={topStation}>
+            <span style={topStationDot} />
+            <code style={topStationCode}>{stationShortId}</code>
+          </span>
+          <span style={topPipe} />
           <button
             onClick={toggleFullscreen}
             style={iconBtn}
@@ -96,11 +103,6 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
       </header>
 
       <main style={mainCol}>
-        <div style={heroBlock}>
-          <p style={heroKicker}>― Operador autenticado ―</p>
-          <h1 style={heroEmail}>{email}</h1>
-        </div>
-
         <div style={moduleHeading}>
           <span style={moduleHeadingLine} />
           <span style={moduleHeadingText}>Módulos</span>
@@ -109,20 +111,18 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
 
         <div style={cardsGrid}>
           <ModuleCard
-            number="01"
             label="Imprimir RFID"
             description="Browse de lotes confirmados, lookup de EAN13 (local + Shopify), impressão com margem de segurança"
             icon={<IconTag style={moduleIcon} />}
             onClick={() => onEnter("rfid")}
-            status="pronto"
+            status="ready"
           />
           <ModuleCard
-            number="02"
             label="Impressão de NF"
             description="Bipar etiqueta RFID, identificar pedido, imprimir DANFE automática"
             icon={<IconReceipt style={moduleIcon} />}
             onClick={() => onEnter("nf")}
-            status="em-breve"
+            status="coming-soon"
             disabled
           />
         </div>
@@ -137,17 +137,7 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
   );
 }
 
-function StatusPill({ label, dot }: { label: string; dot?: boolean }) {
-  return (
-    <span style={statusPill}>
-      {dot && <span style={statusDot} />}
-      <span style={statusLabel}>{label}</span>
-    </span>
-  );
-}
-
 function ModuleCard({
-  number,
   label,
   description,
   icon,
@@ -155,12 +145,11 @@ function ModuleCard({
   status,
   disabled,
 }: {
-  number: string;
   label: string;
   description: string;
   icon: ReactNode;
   onClick: () => void;
-  status: "pronto" | "em-breve" | "offline";
+  status: "ready" | "coming-soon" | "offline";
   disabled?: boolean;
 }) {
   return (
@@ -170,16 +159,19 @@ function ModuleCard({
       className={disabled ? "" : "berzerk-module-card"}
       disabled={disabled}
     >
-      <div style={moduleTopRow}>
-        <span style={moduleNumber}>{number}</span>
-        <ModuleStatusBadge status={status} />
+      <div style={moduleHead}>
+        <div style={moduleIconWrap}>{icon}</div>
+        <StatusDot status={status} />
       </div>
-      <div style={moduleIconWrap}>{icon}</div>
-      <h3 style={moduleLabel}>{label}</h3>
-      <p style={moduleDesc}>{description}</p>
+
+      <div style={moduleBody}>
+        <h3 style={moduleLabel}>{label}</h3>
+        <p style={moduleDesc}>{description}</p>
+      </div>
+
       <div style={moduleFooter}>
         <span style={moduleCta} className="berzerk-cta">
-          {status === "em-breve" ? "Indisponível" : "Abrir módulo"}
+          {disabled ? "Em breve" : "Abrir módulo"}
         </span>
         {!disabled && (
           <span style={moduleArrow} className="berzerk-arrow" aria-hidden="true">→</span>
@@ -189,18 +181,17 @@ function ModuleCard({
   );
 }
 
-function ModuleStatusBadge({ status }: { status: "pronto" | "em-breve" | "offline" }) {
-  const styles =
-    status === "pronto"
-      ? { bg: "var(--success-bg)", text: "var(--success-text)", border: "var(--success-border)", dot: "var(--success-dot)", label: "Operacional" }
+function StatusDot({ status }: { status: "ready" | "coming-soon" | "offline" }) {
+  const tone =
+    status === "ready"
+      ? { bg: "var(--success-dot)", label: "Operacional" }
       : status === "offline"
-        ? { bg: "var(--danger-bg)", text: "var(--danger-text)", border: "var(--danger-border)", dot: "currentColor", label: "Offline" }
-        : { bg: "var(--warning-bg)", text: "var(--warning-text)", border: "var(--warning-border)", dot: "var(--warning-dot)", label: "Em breve" };
+        ? { bg: "var(--danger-text)", label: "Offline" }
+        : { bg: "var(--warning-dot)", label: "Em breve" };
 
   return (
-    <span style={{ ...badge, background: styles.bg, color: styles.text, borderColor: styles.border }}>
-      <span style={{ ...badgeDot, background: styles.dot }} />
-      {styles.label}
+    <span style={statusDotWrap} title={tone.label}>
+      <span style={{ ...statusDot, background: tone.bg }} />
     </span>
   );
 }
@@ -210,13 +201,11 @@ if (typeof document !== "undefined" && !document.getElementById("berzerk-home-ke
   const style = document.createElement("style");
   style.id = "berzerk-home-keyframes";
   style.textContent = `
-    .berzerk-module-card {
-      position: relative;
-    }
+    .berzerk-module-card { position: relative; }
     .berzerk-module-card:hover {
       background: var(--bg-card-hover) !important;
       border-color: var(--border-strong) !important;
-      transform: translateY(-3px);
+      transform: translateY(-2px);
     }
     .berzerk-module-card:hover .berzerk-arrow {
       opacity: 1 !important;
@@ -225,17 +214,13 @@ if (typeof document !== "undefined" && !document.getElementById("berzerk-home-ke
     .berzerk-module-card:hover .berzerk-cta {
       color: var(--text) !important;
     }
-    .berzerk-module-card:active {
-      transform: translateY(-1px);
-    }
+    .berzerk-module-card:active { transform: translateY(0); }
     .berzerk-icon-btn:hover {
       background: var(--bg-card-hover) !important;
       color: var(--text) !important;
       border-color: var(--border-strong) !important;
     }
-    .berzerk-text-btn:hover {
-      color: var(--text) !important;
-    }
+    .berzerk-text-btn:hover { color: var(--text) !important; }
   `;
   document.head.appendChild(style);
 }
@@ -317,18 +302,7 @@ const page: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   position: "relative",
-};
-
-const ambientGrid: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  backgroundImage:
-    "linear-gradient(to right, var(--border) 1px, transparent 1px), linear-gradient(to bottom, var(--border) 1px, transparent 1px)",
-  backgroundSize: "48px 48px",
-  opacity: 0.18,
-  maskImage: "radial-gradient(ellipse 70% 60% at 50% 50%, black 30%, transparent 100%)",
-  WebkitMaskImage: "radial-gradient(ellipse 70% 60% at 50% 50%, black 30%, transparent 100%)",
-  pointerEvents: "none",
+  overflow: "hidden",
 };
 
 const topBar: CSSProperties = {
@@ -336,9 +310,11 @@ const topBar: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "20px 40px",
+  padding: "18px 32px",
   borderBottom: "1px solid var(--border)",
   gap: 16,
+  background: "color-mix(in srgb, var(--bg) 85%, transparent)",
+  backdropFilter: "blur(8px)",
 };
 
 const topLeft: CSSProperties = {
@@ -348,15 +324,15 @@ const topLeft: CSSProperties = {
 };
 
 const topLogo: CSSProperties = {
-  width: 28,
-  height: 30,
+  width: 26,
+  height: 28,
   color: "var(--text)",
 };
 
 const topBrand: CSSProperties = {
   display: "flex",
-  alignItems: "baseline",
-  gap: 10,
+  alignItems: "center", // fix: era "baseline", causava desalinho com Anton
+  gap: 12,
 };
 
 const topWordmark: CSSProperties = {
@@ -365,61 +341,70 @@ const topWordmark: CSSProperties = {
   letterSpacing: 1,
   color: "var(--text)",
   lineHeight: 1,
+  // Visual hack: Anton tem cap-height grande, empurra o baseline. Translate corrige.
+  transform: "translateY(1px)",
 };
 
 const topDivider: CSSProperties = {
   width: 1,
-  height: 14,
+  height: 16,
   background: "var(--border-strong)",
-  alignSelf: "center",
 };
 
 const topProduct: CSSProperties = {
-  fontSize: 11,
+  fontSize: 10,
   textTransform: "uppercase",
   letterSpacing: 3,
   color: "var(--text-secondary)",
-  fontWeight: 500,
+  fontWeight: 600,
 };
 
 const topRight: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
+  gap: 10,
 };
 
-const statusPill: CSSProperties = {
+const topUser: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  color: "var(--text-secondary)",
+  letterSpacing: 0.3,
+};
+
+const topPipe: CSSProperties = {
+  width: 1,
+  height: 14,
+  background: "var(--border)",
+};
+
+const topStation: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 8,
-  padding: "6px 12px",
-  background: "var(--bg-card)",
-  border: "1px solid var(--border)",
-  borderRadius: 999,
-  marginRight: 8,
+  gap: 7,
 };
 
-const statusDot: CSSProperties = {
-  width: 7,
-  height: 7,
+const topStationDot: CSSProperties = {
+  width: 6,
+  height: 6,
   borderRadius: "50%",
   background: "var(--success-dot)",
   boxShadow: "0 0 0 3px var(--success-bg)",
 };
 
-const statusLabel: CSSProperties = {
-  fontSize: 11,
+const topStationCode: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  color: "var(--text-secondary)",
-  letterSpacing: 0.4,
+  fontSize: 11,
+  color: "var(--text)",
+  letterSpacing: 0.5,
 };
 
 const iconBtn: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 36,
-  height: 36,
+  width: 32,
+  height: 32,
   background: "transparent",
   border: "1px solid var(--border)",
   borderRadius: 8,
@@ -428,7 +413,7 @@ const iconBtn: CSSProperties = {
   transition: "background 120ms, color 120ms, border-color 120ms",
 };
 
-const btnIcon: CSSProperties = { width: 16, height: 16 };
+const btnIcon: CSSProperties = { width: 15, height: 15 };
 
 const mainCol: CSSProperties = {
   position: "relative",
@@ -437,37 +422,12 @@ const mainCol: CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  padding: "48px 32px",
-  gap: 48,
-  maxWidth: 1100,
+  padding: "64px 32px",
+  gap: 32,
+  maxWidth: 1080,
   width: "100%",
   margin: "0 auto",
   boxSizing: "border-box",
-};
-
-const heroBlock: CSSProperties = {
-  textAlign: "center",
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-};
-
-const heroKicker: CSSProperties = {
-  margin: 0,
-  fontSize: 11,
-  letterSpacing: 4,
-  textTransform: "uppercase",
-  color: "var(--text-muted)",
-  fontWeight: 600,
-};
-
-const heroEmail: CSSProperties = {
-  margin: 0,
-  fontFamily: "var(--font-mono)",
-  fontSize: 18,
-  color: "var(--text)",
-  fontWeight: 500,
-  letterSpacing: 0.3,
 };
 
 const moduleHeading: CSSProperties = {
@@ -475,7 +435,6 @@ const moduleHeading: CSSProperties = {
   alignItems: "center",
   gap: 14,
   width: "100%",
-  maxWidth: 1100,
 };
 
 const moduleHeadingLine: CSSProperties = {
@@ -502,83 +461,75 @@ const cardsGrid: CSSProperties = {
 const moduleCard: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  alignItems: "flex-start",
-  gap: 14,
-  padding: 26,
+  alignItems: "stretch",
+  gap: 22,
+  padding: "28px 26px",
   background: "var(--bg-card)",
   border: "1px solid var(--border)",
-  borderRadius: 12,
+  borderRadius: 14,
   cursor: "pointer",
   textAlign: "left",
   color: "var(--text)",
   transition: "background 160ms, border-color 160ms, transform 160ms",
-  minHeight: 240,
+  minHeight: 220,
   fontFamily: "inherit",
 };
 
 const moduleCardDisabled: CSSProperties = {
   cursor: "not-allowed",
-  opacity: 0.55,
+  opacity: 0.5,
 };
 
-const moduleTopRow: CSSProperties = {
+const moduleHead: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
   width: "100%",
 };
 
-const moduleNumber: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: 11,
-  color: "var(--text-muted)",
-  fontWeight: 600,
-  letterSpacing: 1.5,
-};
-
-const badge: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  fontSize: 9,
-  fontWeight: 700,
-  padding: "3px 9px",
-  borderRadius: 999,
-  border: "1px solid",
-  textTransform: "uppercase",
-  letterSpacing: 1.2,
-};
-
-const badgeDot: CSSProperties = {
-  width: 6,
-  height: 6,
-  borderRadius: "50%",
-};
-
 const moduleIconWrap: CSSProperties = {
-  width: 44,
-  height: 44,
+  width: 42,
+  height: 42,
   borderRadius: 10,
   background: "var(--bg-input)",
   border: "1px solid var(--border)",
   display: "grid",
   placeItems: "center",
   color: "var(--text)",
-  marginTop: 4,
 };
 
 const moduleIcon: CSSProperties = {
-  width: 22,
-  height: 22,
+  width: 20,
+  height: 20,
+};
+
+const statusDotWrap: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: 6,
+};
+
+const statusDot: CSSProperties = {
+  width: 8,
+  height: 8,
+  borderRadius: "50%",
+};
+
+const moduleBody: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  flex: 1,
 };
 
 const moduleLabel: CSSProperties = {
   margin: 0,
-  fontFamily: "var(--font-display)",
-  fontSize: 30,
+  fontFamily: "var(--font-sans)",
+  fontSize: 18,
+  fontWeight: 600,
   color: "var(--text)",
-  letterSpacing: 0.5,
-  lineHeight: 1,
+  letterSpacing: -0.2,
+  lineHeight: 1.2,
 };
 
 const moduleDesc: CSSProperties = {
@@ -586,7 +537,6 @@ const moduleDesc: CSSProperties = {
   fontSize: 13,
   color: "var(--text-secondary)",
   lineHeight: 1.55,
-  flex: 1,
 };
 
 const moduleFooter: CSSProperties = {
@@ -594,14 +544,14 @@ const moduleFooter: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   width: "100%",
-  paddingTop: 12,
+  paddingTop: 14,
   borderTop: "1px solid var(--border)",
   marginTop: "auto",
 };
 
 const moduleCta: CSSProperties = {
-  fontSize: 11,
-  letterSpacing: 1.5,
+  fontSize: 10,
+  letterSpacing: 2,
   textTransform: "uppercase",
   color: "var(--text-muted)",
   fontWeight: 700,
@@ -619,7 +569,7 @@ const footer: CSSProperties = {
   position: "relative",
   display: "flex",
   justifyContent: "center",
-  padding: "20px 32px",
+  padding: "18px 32px",
   borderTop: "1px solid var(--border)",
 };
 
@@ -628,7 +578,7 @@ const signOutBtn: CSSProperties = {
   border: 0,
   color: "var(--text-muted)",
   cursor: "pointer",
-  fontSize: 11,
+  fontSize: 10,
   padding: "4px 8px",
   textTransform: "uppercase",
   letterSpacing: 2,

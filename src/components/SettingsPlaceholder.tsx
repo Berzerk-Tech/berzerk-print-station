@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { BackButton } from "./BackButton";
 import { UpdateChecker } from "./UpdateChecker";
+import { AmbientBackground } from "./AmbientBackground";
 import { getStationId } from "../lib/station";
 
 type Props = { onBack: () => void };
@@ -10,6 +11,8 @@ export function SettingsPlaceholder({ onBack }: Props) {
 
   return (
     <div style={page}>
+      <AmbientBackground />
+
       <header style={subHeader}>
         <div style={subHeaderLeft}>
           <BackButton onClick={onBack} />
@@ -85,9 +88,12 @@ const page: CSSProperties = {
   color: "var(--text)",
   display: "flex",
   flexDirection: "column",
+  position: "relative",
+  overflow: "hidden",
 };
 
 const subHeader: CSSProperties = {
+  position: "relative",
   display: "grid",
   gridTemplateColumns: "1fr auto 1fr",
   alignItems: "center",
@@ -115,6 +121,7 @@ const title: CSSProperties = {
 };
 
 const body: CSSProperties = {
+  position: "relative",
   flex: 1,
   padding: "40px 32px 64px",
   display: "flex",
