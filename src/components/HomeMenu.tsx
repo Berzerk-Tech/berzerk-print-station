@@ -122,8 +122,7 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
             description="Bipar etiqueta RFID, identificar pedido pronto e imprimir DANFE automática"
             icon={<IconReceipt style={moduleIcon} />}
             onClick={() => onEnter("nf")}
-            status="coming-soon"
-            disabled
+            status="preview"
           />
         </div>
       </main>
@@ -149,7 +148,7 @@ function ModuleCard({
   description: string;
   icon: ReactNode;
   onClick: () => void;
-  status: "ready" | "coming-soon" | "offline";
+  status: "ready" | "preview" | "coming-soon" | "offline";
   disabled?: boolean;
 }) {
   return (
@@ -181,11 +180,13 @@ function ModuleCard({
   );
 }
 
-function StatusDot({ status }: { status: "ready" | "coming-soon" | "offline" }) {
+function StatusDot({ status }: { status: "ready" | "preview" | "coming-soon" | "offline" }) {
   const tone =
     status === "ready"
       ? { bg: "var(--success-dot)", label: "Operacional" }
-      : status === "offline"
+      : status === "preview"
+        ? { bg: "var(--info-text)", label: "Preview" }
+        : status === "offline"
         ? { bg: "var(--danger-text)", label: "Offline" }
         : { bg: "var(--warning-dot)", label: "Em breve" };
 
