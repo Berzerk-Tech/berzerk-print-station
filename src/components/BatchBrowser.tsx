@@ -360,7 +360,7 @@ export function BatchBrowser({
           <BackButton onClick={onBack} />
         </div>
         <div style={subHeaderCenter}>
-          <h2 style={subHeaderTitle}>Etiquetagem</h2>
+          <h2 style={subHeaderTitle}>Produção</h2>
           <div style={searchWrap}>
             <svg
               viewBox="0 0 24 24"

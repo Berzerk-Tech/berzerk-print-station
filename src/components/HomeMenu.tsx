@@ -8,6 +8,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { supabase } from "../lib/supabase";
 import { getStoredTheme, setTheme, type Theme } from "../lib/theme";
+import { getDeviceConfig } from "../lib/devices";
 import { BerzerkLogo } from "./BerzerkLogo";
 import { AmbientBackground } from "./AmbientBackground";
 
@@ -22,6 +23,7 @@ type Props = {
 export function HomeMenu({ email, stationShortId, onEnter }: Props) {
   const [theme, setThemeLocal] = useState<Theme>(getStoredTheme());
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const devices = getDeviceConfig();
 
   useEffect(() => {
     (async () => {
@@ -103,24 +105,39 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
       </header>
 
       <main style={mainCol}>
-        <div style={moduleHeading}>
-          <span style={moduleHeadingLine} />
-          <span style={moduleHeadingText}>Módulos</span>
-          <span style={moduleHeadingLine} />
+        <div style={heroBlock}>
+          <span style={heroKicker}>― Bem-vindo de volta ―</span>
+          <h1 style={heroGreeting}>{firstName(email)}</h1>
+          <p style={heroSubtitle}>
+            O que vamos fazer hoje na estação{" "}
+            <code style={heroStationInline}>{stationShortId}</code>?
+          </p>
         </div>
+
+        <StatusStrip
+          printerConfigured={!!devices.printer}
+          readerMode={devices.reader.mode}
+          onOpenSettings={() => onEnter("settings")}
+        />
 
         <div style={cardsGrid}>
           <ModuleCard
-            label="Etiquetagem"
-            description="Aplicar identidade RFID em lotes de produção — lookup de EAN13 (local + Shopify) e impressão com margem de segurança"
-            icon={<IconTag style={moduleIcon} />}
+            label="Produção"
+            tagline="Gerar tags RFID"
+            description="Pra cada lote em produção, lê os EANs e imprime as etiquetas com margem"
+            icon={<IconTag />}
+            iconBg="var(--info-bg)"
+            iconColor="var(--info-text)"
             onClick={() => onEnter("rfid")}
             status="ready"
           />
           <ModuleCard
             label="Expedição"
-            description="Bipar etiqueta RFID, identificar pedido pronto e imprimir DANFE automática"
-            icon={<IconReceipt style={moduleIcon} />}
+            tagline="Despachar pedidos"
+            description="Bipa etiqueta, identifica pedido, imprime DANFE automática"
+            icon={<IconReceipt />}
+            iconBg="var(--warning-bg)"
+            iconColor="var(--warning-text)"
             onClick={() => onEnter("nf")}
             status="preview"
           />
@@ -136,86 +153,158 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
   );
 }
 
-function ModuleCard({
-  label,
-  description,
-  icon,
-  onClick,
-  status,
-  disabled,
+function firstName(email: string): string {
+  // leonardo.flores@berzerk.com.br → Leonardo
+  const local = email.split("@")[0] ?? email;
+  const first = local.split(".")[0] ?? local;
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+}
+
+// ============================================================
+// StatusStrip — barra com status dos dispositivos e atalho settings
+// ============================================================
+function StatusStrip({
+  printerConfigured,
+  readerMode,
+  onOpenSettings,
 }: {
-  label: string;
-  description: string;
-  icon: ReactNode;
-  onClick: () => void;
-  status: "ready" | "preview" | "coming-soon" | "offline";
-  disabled?: boolean;
+  printerConfigured: boolean;
+  readerMode: "via-proxy" | "direct-itag" | "direct-usb";
+  onOpenSettings: () => void;
 }) {
   return (
-    <button
-      onClick={onClick}
-      style={{ ...moduleCard, ...(disabled ? moduleCardDisabled : {}) }}
-      className={disabled ? "" : "berzerk-module-card"}
-      disabled={disabled}
-    >
-      <div style={moduleHead}>
-        <div style={moduleIconWrap}>{icon}</div>
-        <StatusDot status={status} />
+    <div style={statusStrip}>
+      <StatusChip
+        label="Impressora"
+        value={printerConfigured ? "Configurada" : "Não configurada"}
+        tone={printerConfigured ? "ok" : "warn"}
+      />
+      <StatusChip
+        label="Leitor RFID"
+        value={readerMode === "via-proxy" ? "via proxy HTTPS" : "direto"}
+        tone={readerMode === "direct-usb" ? "ok" : "neutral"}
+      />
+      <button
+        type="button"
+        onClick={onOpenSettings}
+        style={statusGoSettings}
+        className="berzerk-text-btn"
+      >
+        Configurar →
+      </button>
+    </div>
+  );
+}
+
+function StatusChip({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ok" | "warn" | "neutral";
+}) {
+  const dotColor =
+    tone === "ok"
+      ? "var(--success-dot)"
+      : tone === "warn"
+        ? "var(--warning-dot)"
+        : "var(--text-muted)";
+  return (
+    <div style={chipBox}>
+      <span style={{ ...chipDot, background: dotColor }} />
+      <div style={chipBody}>
+        <span style={chipLabel}>{label}</span>
+        <span style={chipValue}>{value}</span>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ModuleCard — card de módulo
+// ============================================================
+function ModuleCard({
+  label,
+  tagline,
+  description,
+  icon,
+  iconBg,
+  iconColor,
+  onClick,
+  status,
+}: {
+  label: string;
+  tagline: string;
+  description: string;
+  icon: ReactNode;
+  iconBg: string;
+  iconColor: string;
+  onClick: () => void;
+  status: "ready" | "preview" | "coming-soon" | "offline";
+}) {
+  const statusInfo =
+    status === "ready"
+      ? { label: "Operacional", dot: "var(--success-dot)", text: "var(--success-text)" }
+      : status === "preview"
+        ? { label: "Preview", dot: "var(--info-text)", text: "var(--info-text)" }
+        : status === "offline"
+          ? { label: "Offline", dot: "var(--danger-text)", text: "var(--danger-text)" }
+          : { label: "Em breve", dot: "var(--warning-dot)", text: "var(--warning-text)" };
+
+  return (
+    <button onClick={onClick} style={moduleCard} className="berzerk-module-card">
+      <div style={{ ...cardIconWrap, background: iconBg, color: iconColor }}>
+        <div style={cardIconInner}>{icon}</div>
       </div>
 
-      <div style={moduleBody}>
-        <h3 style={moduleLabel}>{label}</h3>
-        <p style={moduleDesc}>{description}</p>
+      <div style={cardBody}>
+        <span style={cardTagline}>{tagline}</span>
+        <h3 style={cardLabel}>{label}</h3>
+        <p style={cardDesc}>{description}</p>
       </div>
 
-      <div style={moduleFooter}>
-        <span style={moduleCta} className="berzerk-cta">
-          {disabled ? "Em breve" : "Abrir módulo"}
+      <div style={cardFooter}>
+        <span style={{ ...cardStatus, color: statusInfo.text }}>
+          <span style={{ ...cardStatusDot, background: statusInfo.dot }} />
+          {statusInfo.label}
         </span>
-        {!disabled && (
-          <span style={moduleArrow} className="berzerk-arrow" aria-hidden="true">→</span>
-        )}
+        <span style={cardCta} className="berzerk-arrow">
+          Abrir →
+        </span>
       </div>
     </button>
   );
 }
 
-function StatusDot({ status }: { status: "ready" | "preview" | "coming-soon" | "offline" }) {
-  const tone =
-    status === "ready"
-      ? { bg: "var(--success-dot)", label: "Operacional" }
-      : status === "preview"
-        ? { bg: "var(--info-text)", label: "Preview" }
-        : status === "offline"
-        ? { bg: "var(--danger-text)", label: "Offline" }
-        : { bg: "var(--warning-dot)", label: "Em breve" };
-
-  return (
-    <span style={statusDotWrap} title={tone.label}>
-      <span style={{ ...statusDot, background: tone.bg }} />
-    </span>
-  );
-}
-
+// ============================================================
 // Hover/style injection
+// ============================================================
 if (typeof document !== "undefined" && !document.getElementById("berzerk-home-keyframes")) {
   const style = document.createElement("style");
   style.id = "berzerk-home-keyframes";
   style.textContent = `
-    .berzerk-module-card { position: relative; }
+    .berzerk-module-card { position: relative; overflow: hidden; }
+    .berzerk-module-card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, transparent 60%, var(--bg-card-hover) 100%);
+      opacity: 0;
+      transition: opacity 200ms;
+      pointer-events: none;
+    }
     .berzerk-module-card:hover {
-      background: var(--bg-card-hover) !important;
       border-color: var(--border-strong) !important;
-      transform: translateY(-2px);
+      transform: translateY(-3px);
     }
+    .berzerk-module-card:hover::after { opacity: 0.6; }
     .berzerk-module-card:hover .berzerk-arrow {
-      opacity: 1 !important;
-      transform: translateX(4px);
-    }
-    .berzerk-module-card:hover .berzerk-cta {
       color: var(--text) !important;
+      transform: translateX(3px);
     }
-    .berzerk-module-card:active { transform: translateY(0); }
+    .berzerk-module-card:active { transform: translateY(-1px); }
     .berzerk-icon-btn:hover {
       background: var(--bg-card-hover) !important;
       color: var(--text) !important;
@@ -226,8 +315,9 @@ if (typeof document !== "undefined" && !document.getElementById("berzerk-home-ke
   document.head.appendChild(style);
 }
 
-// === ICONS ===
-
+// ============================================================
+// Icons
+// ============================================================
 function IconTag(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -294,8 +384,9 @@ function IconGear(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-// === STYLES ===
-
+// ============================================================
+// Styles
+// ============================================================
 const page: CSSProperties = {
   minHeight: "100vh",
   background: "var(--bg)",
@@ -316,21 +407,13 @@ const topBar: CSSProperties = {
   gap: 16,
 };
 
-const topLeft: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 14,
-};
+const topLeft: CSSProperties = { display: "flex", alignItems: "center", gap: 14 };
 
-const topLogo: CSSProperties = {
-  width: 26,
-  height: 28,
-  color: "var(--text)",
-};
+const topLogo: CSSProperties = { width: 26, height: 28, color: "var(--text)" };
 
 const topBrand: CSSProperties = {
   display: "flex",
-  alignItems: "center", // fix: era "baseline", causava desalinho com Anton
+  alignItems: "center",
   gap: 12,
 };
 
@@ -340,7 +423,6 @@ const topWordmark: CSSProperties = {
   letterSpacing: 1,
   color: "var(--text)",
   lineHeight: 1,
-  // Visual hack: Anton tem cap-height grande, empurra o baseline. Translate corrige.
   transform: "translateY(1px)",
 };
 
@@ -358,30 +440,17 @@ const topProduct: CSSProperties = {
   fontWeight: 600,
 };
 
-const topRight: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-};
+const topRight: CSSProperties = { display: "flex", alignItems: "center", gap: 10 };
 
 const topUser: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 11,
   color: "var(--text-secondary)",
-  letterSpacing: 0.3,
 };
 
-const topPipe: CSSProperties = {
-  width: 1,
-  height: 14,
-  background: "var(--border)",
-};
+const topPipe: CSSProperties = { width: 1, height: 14, background: "var(--border)" };
 
-const topStation: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 7,
-};
+const topStation: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 7 };
 
 const topStationDot: CSSProperties = {
   width: 6,
@@ -421,39 +490,127 @@ const mainCol: CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  padding: "64px 32px",
-  gap: 32,
-  maxWidth: 1080,
+  padding: "48px 32px",
+  gap: 36,
+  maxWidth: 1120,
   width: "100%",
   margin: "0 auto",
   boxSizing: "border-box",
 };
 
-const moduleHeading: CSSProperties = {
+// --- Hero ---
+
+const heroBlock: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 6,
+  textAlign: "center",
+};
+
+const heroKicker: CSSProperties = {
+  fontSize: 11,
+  letterSpacing: 4,
+  textTransform: "uppercase",
+  color: "var(--text-muted)",
+  fontWeight: 600,
+};
+
+const heroGreeting: CSSProperties = {
+  margin: 0,
+  fontFamily: "var(--font-display)",
+  fontSize: 64,
+  fontWeight: 400,
+  color: "var(--text)",
+  letterSpacing: 1,
+  lineHeight: 1,
+};
+
+const heroSubtitle: CSSProperties = {
+  margin: 0,
+  marginTop: 4,
+  fontSize: 14,
+  color: "var(--text-secondary)",
+};
+
+const heroStationInline: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 12,
+  background: "var(--bg-input)",
+  padding: "1px 7px",
+  borderRadius: 4,
+  border: "1px solid var(--border)",
+  color: "var(--text)",
+};
+
+// --- Status strip ---
+
+const statusStrip: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 14,
+  flexWrap: "wrap",
+  justifyContent: "center",
   width: "100%",
+  maxWidth: 720,
 };
 
-const moduleHeadingLine: CSSProperties = {
-  flex: 1,
-  height: 1,
-  background: "var(--border)",
+const chipBox: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "10px 14px",
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: 999,
 };
 
-const moduleHeadingText: CSSProperties = {
-  fontSize: 10,
-  letterSpacing: 4,
+const chipDot: CSSProperties = {
+  width: 7,
+  height: 7,
+  borderRadius: "50%",
+};
+
+const chipBody: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 1,
+  lineHeight: 1.2,
+};
+
+const chipLabel: CSSProperties = {
+  fontSize: 9,
+  letterSpacing: 1.5,
   textTransform: "uppercase",
   color: "var(--text-muted)",
   fontWeight: 700,
 };
 
+const chipValue: CSSProperties = {
+  fontSize: 12,
+  color: "var(--text)",
+  fontWeight: 500,
+};
+
+const statusGoSettings: CSSProperties = {
+  background: "transparent",
+  border: 0,
+  color: "var(--text-muted)",
+  cursor: "pointer",
+  fontSize: 11,
+  letterSpacing: 1.5,
+  textTransform: "uppercase",
+  fontWeight: 700,
+  padding: "8px 12px",
+  transition: "color 160ms",
+};
+
+// --- Cards ---
+
 const cardsGrid: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-  gap: 18,
+  gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+  gap: 20,
   width: "100%",
 };
 
@@ -461,107 +618,97 @@ const moduleCard: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   alignItems: "stretch",
-  gap: 22,
-  padding: "28px 26px",
+  gap: 24,
+  padding: 28,
   background: "var(--bg-card)",
   border: "1px solid var(--border)",
-  borderRadius: 14,
+  borderRadius: 16,
   cursor: "pointer",
   textAlign: "left",
   color: "var(--text)",
   transition: "background 160ms, border-color 160ms, transform 160ms",
-  minHeight: 220,
+  minHeight: 280,
   fontFamily: "inherit",
 };
 
-const moduleCardDisabled: CSSProperties = {
-  cursor: "not-allowed",
-  opacity: 0.5,
-};
-
-const moduleHead: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  width: "100%",
-};
-
-const moduleIconWrap: CSSProperties = {
-  width: 42,
-  height: 42,
-  borderRadius: 10,
-  background: "var(--bg-input)",
-  border: "1px solid var(--border)",
+const cardIconWrap: CSSProperties = {
+  width: 64,
+  height: 64,
+  borderRadius: 16,
   display: "grid",
   placeItems: "center",
-  color: "var(--text)",
+  border: "1px solid",
+  borderColor: "transparent",
 };
 
-const moduleIcon: CSSProperties = {
-  width: 20,
-  height: 20,
+const cardIconInner: CSSProperties = {
+  width: 30,
+  height: 30,
 };
 
-const statusDotWrap: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  padding: 6,
-};
-
-const statusDot: CSSProperties = {
-  width: 8,
-  height: 8,
-  borderRadius: "50%",
-};
-
-const moduleBody: CSSProperties = {
+const cardBody: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 8,
   flex: 1,
 };
 
-const moduleLabel: CSSProperties = {
-  margin: 0,
-  fontFamily: "var(--font-sans)",
-  fontSize: 18,
-  fontWeight: 600,
-  color: "var(--text)",
-  letterSpacing: -0.2,
-  lineHeight: 1.2,
+const cardTagline: CSSProperties = {
+  fontSize: 10,
+  letterSpacing: 2.5,
+  textTransform: "uppercase",
+  color: "var(--text-muted)",
+  fontWeight: 700,
 };
 
-const moduleDesc: CSSProperties = {
+const cardLabel: CSSProperties = {
+  margin: 0,
+  fontSize: 26,
+  fontWeight: 700,
+  letterSpacing: -0.4,
+  color: "var(--text)",
+  lineHeight: 1.1,
+};
+
+const cardDesc: CSSProperties = {
   margin: 0,
   fontSize: 13,
   color: "var(--text-secondary)",
-  lineHeight: 1.55,
+  lineHeight: 1.6,
 };
 
-const moduleFooter: CSSProperties = {
+const cardFooter: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  width: "100%",
-  paddingTop: 14,
+  paddingTop: 16,
   borderTop: "1px solid var(--border)",
   marginTop: "auto",
 };
 
-const moduleCta: CSSProperties = {
-  fontSize: 10,
-  letterSpacing: 2,
+const cardStatus: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 7,
+  fontSize: 11,
+  letterSpacing: 1.2,
   textTransform: "uppercase",
-  color: "var(--text-muted)",
   fontWeight: 700,
-  transition: "color 160ms",
 };
 
-const moduleArrow: CSSProperties = {
-  fontSize: 18,
-  color: "var(--text)",
-  opacity: 0,
-  transition: "opacity 160ms, transform 160ms",
+const cardStatusDot: CSSProperties = {
+  width: 7,
+  height: 7,
+  borderRadius: "50%",
+};
+
+const cardCta: CSSProperties = {
+  fontSize: 12,
+  letterSpacing: 1.5,
+  textTransform: "uppercase",
+  fontWeight: 700,
+  color: "var(--text-muted)",
+  transition: "color 160ms, transform 160ms",
 };
 
 const footer: CSSProperties = {
