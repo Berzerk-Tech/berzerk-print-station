@@ -6,7 +6,7 @@ import {
   getEansForBatch,
   type EanSource,
 } from "./ean13Lookup";
-import type { PrintJobItem } from "../lib/itag/printJob";
+import type { PrintJobItem } from "../lib/itag/iprint";
 
 export type ProductionBatch = {
   id: string;
@@ -28,6 +28,12 @@ export type ResolvedBatch = {
   isPrintable: boolean;
   shopifyTitle: string | null;
   shopifyColor: string | null;
+  /**
+   * True quando o resolve foi feito com `skipShopifyFallback` e ainda tem
+   * tamanhos faltando. UI pode oferecer "Buscar no Shopify" pra resolver
+   * sob demanda.
+   */
+  shopifyFallbackAvailable: boolean;
 };
 
 export type PrintedBatchEntry = {
@@ -145,6 +151,7 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
 
 export async function resolveBatch(
   batch: ProductionBatch,
+  opts?: { skipShopifyFallback?: boolean },
 ): Promise<ResolvedBatch> {
   const sizes = batch.sizes.map((s) => s.size);
   const empty: ResolvedBatch = {
@@ -156,6 +163,7 @@ export async function resolveBatch(
     isPrintable: false,
     shopifyTitle: batch.design_name,
     shopifyColor: batch.shirt_color,
+    shopifyFallbackAvailable: false,
   };
   if (sizes.length === 0 || !batch.design_name) return empty;
   try {
@@ -163,6 +171,7 @@ export async function resolveBatch(
       designName: batch.design_name,
       shirtColor: batch.shirt_color,
       sizes,
+      skipShopifyFallback: opts?.skipShopifyFallback,
     });
     return {
       batch,
@@ -173,6 +182,7 @@ export async function resolveBatch(
       isPrintable: lookup.missingSizes.length === 0 && sizes.length > 0,
       shopifyTitle: lookup.shopifyProduct?.title ?? batch.design_name,
       shopifyColor: lookup.shopifyProduct?.color ?? batch.shirt_color,
+      shopifyFallbackAvailable: lookup.shopifyFallbackAvailable,
     };
   } catch (e) {
     console.warn("[batches] resolveBatch threw for", batch.batch_code, e);

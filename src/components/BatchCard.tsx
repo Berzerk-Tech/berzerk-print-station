@@ -12,6 +12,14 @@ type Props = {
   resolved: ResolvedBatch;
   state: CardState;
   onPrint: (resolved: ResolvedBatch) => void;
+  /**
+   * Dispara um re-resolve do lote forçando o fallback do Shopify. Disponível
+   * quando o load inicial pulou a edge function por performance e ainda tem
+   * tamanhos sem EAN local (`resolved.shopifyFallbackAvailable === true`).
+   */
+  onSearchShopify?: (resolved: ResolvedBatch) => void;
+  /** True enquanto o re-resolve via Shopify tá em voo pra esse lote. */
+  searchingShopify?: boolean;
 };
 
 const STATUS_LABEL: Record<RfidPrintJobStatus, string> = {
@@ -38,9 +46,22 @@ function aggregateGrade(items: Array<{ size: string; quantity: number }>) {
   return Array.from(map.entries());
 }
 
-export function BatchCard({ resolved, state, onPrint }: Props) {
-  const { batch, sources, missingSizes, isPrintable, shopifyTitle, shopifyColor } =
-    resolved;
+export function BatchCard({
+  resolved,
+  state,
+  onPrint,
+  onSearchShopify,
+  searchingShopify,
+}: Props) {
+  const {
+    batch,
+    sources,
+    missingSizes,
+    isPrintable,
+    shopifyTitle,
+    shopifyColor,
+    shopifyFallbackAvailable,
+  } = resolved;
   const title = shopifyTitle ?? batch.design_name ?? batch.batch_code;
   const color = shopifyColor ?? batch.shirt_color;
 
@@ -121,10 +142,24 @@ export function BatchCard({ resolved, state, onPrint }: Props) {
 
         {!isPrintable && !isFailed && missingSizes.length > 0 && (
           <div style={hintBox}>
-            Faltando EAN13 nos tamanhos:{" "}
-            <strong style={{ color: "var(--warning-text)" }}>
-              {missingSizes.join(", ")}
-            </strong>
+            <span>
+              Faltando EAN13 nos tamanhos:{" "}
+              <strong style={{ color: "var(--warning-text)" }}>
+                {missingSizes.join(", ")}
+              </strong>
+            </span>
+            {shopifyFallbackAvailable && onSearchShopify && (
+              <button
+                onClick={() =>
+                  !searchingShopify && onSearchShopify(resolved)
+                }
+                disabled={searchingShopify}
+                style={searchingShopify ? shopifyBtnBusy : shopifyBtn}
+                title="Consultar variants do Shopify pra preencher EANs faltantes"
+              >
+                {searchingShopify ? "Buscando…" : "Buscar no Shopify"}
+              </button>
+            )}
           </div>
         )}
 
@@ -336,6 +371,31 @@ const hintBox: CSSProperties = {
   borderRadius: 6,
   fontSize: 12,
   lineHeight: 1.5,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const shopifyBtn: CSSProperties = {
+  background: "var(--bg-card)",
+  color: "var(--text)",
+  border: "1px solid var(--border-strong)",
+  borderRadius: 6,
+  padding: "4px 10px",
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: 0.2,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
+};
+
+const shopifyBtnBusy: CSSProperties = {
+  ...shopifyBtn,
+  opacity: 0.6,
+  cursor: "wait",
 };
 
 const footer: CSSProperties = {

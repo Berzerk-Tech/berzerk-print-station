@@ -7,11 +7,17 @@ import {
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 import { getStationId } from "../lib/station";
-import { printJob as itagPrintJob } from "../lib/itag/printJob";
+import { printJob as itagPrintJob } from "../lib/itag/iprint";
 import { applyMargin, type ApplyMarginInput } from "../lib/settings";
 import { clearLookupCaches } from "../services/ean13Lookup";
 import * as printJobsService from "../services/printJobs";
-import type { RfidPrintJob, RfidPrintJobStatus } from "../services/printJobs";
+import type {
+  RfidPrintJob,
+  RfidPrintJobStatus,
+  JobAwaitingMovimentacao,
+} from "../services/printJobs";
+import { getIprintConfig, toRustConfig } from "../services/iprintConfig";
+import { invoke } from "@tauri-apps/api/core";
 import {
   buildPrintItems,
   fetchPendingBatches,
@@ -33,7 +39,14 @@ const MAX_VISIBLE = 50;
 const CONCURRENCY = 4;
 
 type PrintingState = { jobId: string; startedAt: number };
-type Filter = "all" | "ready" | "blocked" | "queue" | "history";
+type Filter =
+  | "all"
+  | "ready"
+  | "blocked"
+  | "queue"
+  | "history"
+  | "awaiting";
+type MovingState = { startedAt: number };
 
 function formatError(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -56,6 +69,7 @@ function formatError(e: unknown): string {
 async function resolveAllWithConcurrency(
   batches: ProductionBatch[],
   concurrency: number,
+  opts?: { skipShopifyFallback?: boolean },
 ): Promise<ResolvedBatch[]> {
   const out: ResolvedBatch[] = new Array(batches.length);
   let next = 0;
@@ -65,7 +79,7 @@ async function resolveAllWithConcurrency(
       while (next < batches.length) {
         const i = next++;
         try {
-          out[i] = await resolveBatch(batches[i]);
+          out[i] = await resolveBatch(batches[i], opts);
         } catch (e) {
           console.warn(
             "[BatchBrowser] resolveBatch failed for",
@@ -81,6 +95,7 @@ async function resolveAllWithConcurrency(
             isPrintable: false,
             shopifyTitle: batches[i].design_name,
             shopifyColor: batches[i].shirt_color,
+            shopifyFallbackAvailable: false,
           };
         }
       }
@@ -113,9 +128,18 @@ export function BatchBrowser({
   );
   const [query, setQuery] = useState("");
   const [activeJobs, setActiveJobs] = useState<RfidPrintJob[]>([]);
+  const [awaitingJobs, setAwaitingJobs] = useState<JobAwaitingMovimentacao[]>(
+    [],
+  );
+  const [movingJobs, setMovingJobs] = useState<Map<string, MovingState>>(
+    new Map(),
+  );
   const [realtimeStatus, setRealtimeStatus] = useState<
     "connecting" | "connected" | "disconnected"
   >("connecting");
+  const [searchingShopify, setSearchingShopify] = useState<Set<string>>(
+    new Set(),
+  );
 
   const stationId = getStationId();
   const operatorId = session.user.id;
@@ -132,7 +156,13 @@ export function BatchBrowser({
         fetchTodayHistory(),
       ]);
       const visible = pending.slice(0, MAX_VISIBLE);
-      const resolved = await resolveAllWithConcurrency(visible, CONCURRENCY);
+      // Pula shopify-analytics no load — usa só cache local (unified_products
+      // + cache em memória/localStorage do Shopify). Lotes sem cobertura
+      // completa ficam com `shopifyFallbackAvailable: true` e o operador
+      // pode disparar a busca via botão no card.
+      const resolved = await resolveAllWithConcurrency(visible, CONCURRENCY, {
+        skipShopifyFallback: true,
+      });
       setBatches(resolved);
       setHistory(hist);
       setLoadError(null);
@@ -153,11 +183,25 @@ export function BatchBrowser({
   useEffect(() => {
     let alive = true;
     async function loadJobs() {
-      try {
-        const jobs = await printJobsService.fetchActivePrintJobs();
-        if (alive) setActiveJobs(jobs);
-      } catch (e) {
-        console.warn("[BatchBrowser] fetchActivePrintJobs failed:", e);
+      // Independentes — se a tabela rfid_epc_inventory ainda não existir,
+      // não derrubar a fila de impressão. allSettled isola as falhas.
+      const [jobsRes, awaitingRes] = await Promise.allSettled([
+        printJobsService.fetchActivePrintJobs(),
+        printJobsService.fetchJobsAwaitingMovimentacao(),
+      ]);
+      if (!alive) return;
+      if (jobsRes.status === "fulfilled") {
+        setActiveJobs(jobsRes.value);
+      } else {
+        console.warn("[BatchBrowser] fetchActivePrintJobs failed:", jobsRes.reason);
+      }
+      if (awaitingRes.status === "fulfilled") {
+        setAwaitingJobs(awaitingRes.value);
+      } else {
+        console.warn(
+          "[BatchBrowser] fetchJobsAwaitingMovimentacao failed:",
+          awaitingRes.reason,
+        );
       }
     }
     loadJobs();
@@ -193,6 +237,34 @@ export function BatchBrowser({
   const requestPrint = useCallback((resolved: ResolvedBatch) => {
     if (!resolved.isPrintable) return;
     setPendingConfirm(resolved);
+  }, []);
+
+  // Re-resolve um lote específico forçando o fallback do Shopify. Usado
+  // quando o operador clica "Buscar no Shopify" em card bloqueado por
+  // EAN13 faltante. Resultado substitui a entry correspondente em batches[].
+  const handleSearchShopify = useCallback(async (resolved: ResolvedBatch) => {
+    const batchId = resolved.batch.id;
+    setSearchingShopify((s) => {
+      const next = new Set(s);
+      next.add(batchId);
+      return next;
+    });
+    try {
+      const updated = await resolveBatch(resolved.batch, {
+        skipShopifyFallback: false,
+      });
+      setBatches((prev) =>
+        prev.map((b) => (b.batch.id === batchId ? updated : b)),
+      );
+    } catch (e) {
+      console.warn("[BatchBrowser] handleSearchShopify failed:", e);
+    } finally {
+      setSearchingShopify((s) => {
+        const next = new Set(s);
+        next.delete(batchId);
+        return next;
+      });
+    }
   }, []);
 
   const confirmAndPrint = useCallback(
@@ -237,6 +309,7 @@ export function BatchBrowser({
 
       try {
         const result = await itagPrintJob({
+          jobId,
           batchId: batch.id,
           batchCode: batch.batch_code,
           items,
@@ -288,9 +361,78 @@ export function BatchBrowser({
   const filteredHistory = history.filter(
     (h) => !q || matchesQuery(h.batch_code) || matchesQuery(h.design_name),
   );
+  const filteredAwaiting = awaitingJobs.filter(
+    (a) =>
+      !q ||
+      matchesQuery(a.job.batch_code) ||
+      matchesQuery(a.job.design_name),
+  );
 
   const totalReady = batches.filter((b) => b.isPrintable).length;
   const totalBlocked = batches.length - totalReady;
+
+  const handleMovimentar = useCallback(
+    async (entry: JobAwaitingMovimentacao) => {
+      const job = entry.job;
+      if (movingJobs.has(job.id)) return;
+      const config = getIprintConfig();
+      if (!config.basicUser || !config.basicPass) {
+        window.alert("Credenciais iTAG não configuradas em Settings.");
+        return;
+      }
+      const ok = window.confirm(
+        `Movimentar ${entry.pendingCount} EPC(s) do lote ${job.batch_code} ` +
+          `pra situação ${config.situacaoDestino}?\n\n` +
+          `Empresa origem ${config.empresaOrigem} → destino ${config.empresaDestino}.`,
+      );
+      if (!ok) return;
+
+      setMovingJobs(
+        (m) => new Map(m).set(job.id, { startedAt: Date.now() }),
+      );
+      try {
+        const epcs = await printJobsService.fetchEpcsByJob(job.id);
+        const pendingEpcs = epcs
+          .filter((e) => !e.moved_at)
+          .map((e) => e.epc);
+        if (pendingEpcs.length === 0) {
+          // Nada a mover — refresh e sai
+          const refreshed = await printJobsService.fetchJobsAwaitingMovimentacao();
+          setAwaitingJobs(refreshed);
+          return;
+        }
+
+        await invoke("itag_iprint_movimentar", {
+          config: toRustConfig(config),
+          epcs: pendingEpcs,
+          notaFiscal: job.batch_code,
+          situacaoDestino: config.situacaoDestino,
+          empresaOrigem: config.empresaOrigem,
+          empresaDestino: config.empresaDestino,
+        });
+
+        await printJobsService.markMoved({
+          epcs: pendingEpcs,
+          situacaoDestino: config.situacaoDestino,
+          operatorId,
+        });
+
+        const refreshed = await printJobsService.fetchJobsAwaitingMovimentacao();
+        setAwaitingJobs(refreshed);
+      } catch (e) {
+        const msg = formatError(e);
+        console.error("[BatchBrowser] handleMovimentar failed:", e);
+        window.alert(`Movimentação falhou: ${msg}`);
+      } finally {
+        setMovingJobs((m) => {
+          const next = new Map(m);
+          next.delete(job.id);
+          return next;
+        });
+      }
+    },
+    [movingJobs, operatorId],
+  );
 
   function cardStateFor(batchId: string): CardState {
     const p = printing.get(batchId);
@@ -309,6 +451,7 @@ export function BatchBrowser({
     setFilter((cur) => (cur === f ? "all" : f));
 
   const showQueue = filter === "all" || filter === "queue";
+  const showAwaiting = filter === "all" || filter === "awaiting";
   const showReady = filter === "all" || filter === "ready";
   const showBlocked = filter === "all" || filter === "blocked";
   const showHistory = filter === "all" || filter === "history";
@@ -462,6 +605,15 @@ export function BatchBrowser({
               onClick={() => toggleFilter("queue")}
             />
           )}
+          {awaitingJobs.length > 0 && (
+            <Stat
+              label="movimentar"
+              value={awaitingJobs.length}
+              accent="info"
+              active={filter === "awaiting"}
+              onClick={() => toggleFilter("awaiting")}
+            />
+          )}
           <Stat
             label="impressos hoje"
             value={history.length}
@@ -509,6 +661,26 @@ export function BatchBrowser({
               </Section>
             )}
 
+            {showAwaiting && filteredAwaiting.length > 0 && (
+              <Section
+                title="Aguardando movimentação"
+                count={filteredAwaiting.length}
+                accent="info"
+                hint="Lotes impressos cujos EPCs ainda não foram movimentados no iTAG. Clica em 'Movimentar' pra liberar pro uso."
+              >
+                <div style={queueList}>
+                  {filteredAwaiting.map((a) => (
+                    <AwaitingMovRow
+                      key={a.job.id}
+                      entry={a}
+                      moving={movingJobs.has(a.job.id)}
+                      onMovimentar={handleMovimentar}
+                    />
+                  ))}
+                </div>
+              </Section>
+            )}
+
             {showReady && (
               <Section
                 title="Prontos pra imprimir"
@@ -524,6 +696,8 @@ export function BatchBrowser({
                       resolved={r}
                       state={cardStateFor(r.batch.id)}
                       onPrint={requestPrint}
+                      onSearchShopify={handleSearchShopify}
+                      searchingShopify={searchingShopify.has(r.batch.id)}
                     />
                   ))
                 )}
@@ -543,6 +717,8 @@ export function BatchBrowser({
                     resolved={r}
                     state={cardStateFor(r.batch.id)}
                     onPrint={requestPrint}
+                    onSearchShopify={handleSearchShopify}
+                    searchingShopify={searchingShopify.has(r.batch.id)}
                   />
                 ))}
               </Section>
@@ -592,7 +768,8 @@ export function BatchBrowser({
               filter !== "all" &&
               ((filter === "ready" && ready.length === 0) ||
                 (filter === "blocked" && blocked.length === 0) ||
-                (filter === "history" && history.length === 0)) && (
+                (filter === "history" && history.length === 0) ||
+                (filter === "awaiting" && awaitingJobs.length === 0)) && (
                 <EmptyState text="Sem entradas nessa categoria." />
               )}
           </>
@@ -722,6 +899,53 @@ function PrintJobRow({
         aria-label={cancelLabel}
       >
         ✕
+      </button>
+    </div>
+  );
+}
+
+function AwaitingMovRow({
+  entry,
+  moving,
+  onMovimentar,
+}: {
+  entry: JobAwaitingMovimentacao;
+  moving: boolean;
+  onMovimentar: (e: JobAwaitingMovimentacao) => void;
+}) {
+  const completed = entry.job.completed_at
+    ? formatTime(entry.job.completed_at)
+    : null;
+  return (
+    <div style={queueRow}>
+      <span style={{ ...queueBadge, ...JOB_STATUS_STYLE.done }}>IMPRESSO</span>
+      <div style={queueInfo}>
+        <div style={queueTopLine}>
+          <span style={queueCode}>{entry.job.batch_code}</span>
+          <span style={queueDesign}>
+            {entry.job.design_name ?? "—"}
+            {entry.job.shirt_color && (
+              <>
+                <span style={queueDot}>·</span>
+                {entry.job.shirt_color}
+              </>
+            )}
+          </span>
+        </div>
+      </div>
+      <div style={queueMeta}>
+        <span style={queueQty}>
+          {entry.pendingCount} / {entry.totalCount} pendente(s)
+        </span>
+        {completed && <span style={queueTime}>{completed}</span>}
+      </div>
+      <button
+        onClick={() => onMovimentar(entry)}
+        disabled={moving}
+        style={moving ? mvBtnBusy : mvBtn}
+        title="Movimentar EPCs pendentes pra situação destino"
+      >
+        {moving ? "Movendo…" : "Movimentar"}
       </button>
     </div>
   );
@@ -1135,6 +1359,25 @@ const statusLabel: CSSProperties = {
   color: "var(--text-secondary)",
   fontWeight: 500,
   letterSpacing: 0.2,
+};
+
+const mvBtn: CSSProperties = {
+  background: "var(--accent)",
+  color: "var(--accent-text)",
+  border: 0,
+  borderRadius: 6,
+  padding: "8px 14px",
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.8,
+  textTransform: "uppercase",
+  cursor: "pointer",
+};
+
+const mvBtnBusy: CSSProperties = {
+  ...mvBtn,
+  opacity: 0.6,
+  cursor: "wait",
 };
 
 const cancelRowBtn: CSSProperties = {

@@ -15,7 +15,7 @@ import {
   type MarginConfig,
   type MarginMode,
 } from "../lib/settings";
-import type { PrintJobItem } from "../lib/itag/printJob";
+import type { PrintJobItem } from "../lib/itag/iprint";
 
 type Props = {
   resolved: ResolvedBatch;

@@ -14,12 +14,25 @@ export type EanLookupResult = {
     color: string | null;
   } | null;
   unifiedProductId: string | null;
+  /**
+   * True quando sobraram tamanhos sem EAN local E a chamada pro Shopify foi
+   * pulada (`skipShopifyFallback`). UI pode mostrar botão "Buscar no Shopify"
+   * pra subir o lookup sob demanda.
+   */
+  shopifyFallbackAvailable: boolean;
 };
 
 export type LookupInput = {
   designName: string | null | undefined;
   shirtColor: string | null | undefined;
   sizes: string[];
+  /**
+   * Pula `loadShopifyProduct` se sobrarem tamanhos sem EAN local. Usado pelo
+   * load inicial da Produção pra evitar 50+ edge function calls em série
+   * antes do operador ver a lista. Cache em memória/localStorage ainda é
+   * consultado — só pula o fetch novo.
+   */
+  skipShopifyFallback?: boolean;
 };
 
 type ShopifyVariant = {
@@ -154,6 +167,65 @@ async function loadUnifiedProduct(shopifyId: string): Promise<void> {
 const shopifyByProductId = new Map<string, ShopifyProduct>();
 const shopifyLoading = new Map<string, Promise<ShopifyProduct | null>>();
 
+// ── Cache em localStorage com TTL ──────────────────────────────
+// O cache em memória dura só a sessão. Pra evitar refazer todo o trabalho de
+// shopify-analytics ao reabrir o app, persistimos os produtos resolvidos em
+// localStorage com TTL de 1h. Hidratamos o Map em memória no load do módulo.
+const SHOPIFY_CACHE_KEY = "berzerk-rfid:shopify-cache:v1";
+const SHOPIFY_CACHE_TTL_MS = 60 * 60 * 1000; // 1h
+
+type CachedShopifyEntry = {
+  product: ShopifyProduct;
+  cachedAt: number;
+};
+
+function readShopifyStorage(): Record<string, CachedShopifyEntry> {
+  try {
+    const raw = localStorage.getItem(SHOPIFY_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (e) {
+    console.warn("[ean13Lookup] readShopifyStorage failed:", e);
+    return {};
+  }
+}
+
+function writeShopifyStorage(cache: Record<string, CachedShopifyEntry>): void {
+  try {
+    localStorage.setItem(SHOPIFY_CACHE_KEY, JSON.stringify(cache));
+  } catch (e) {
+    // QuotaExceeded ou Privacy mode — silencioso, cache só em memória.
+    console.warn("[ean13Lookup] writeShopifyStorage failed:", e);
+  }
+}
+
+function hydrateShopifyCacheFromStorage(): void {
+  const stored = readShopifyStorage();
+  const now = Date.now();
+  for (const [id, entry] of Object.entries(stored)) {
+    if (entry?.product && now - entry.cachedAt < SHOPIFY_CACHE_TTL_MS) {
+      shopifyByProductId.set(id, entry.product);
+    }
+  }
+}
+
+function persistShopifyEntry(id: string, product: ShopifyProduct): void {
+  const cache = readShopifyStorage();
+  const now = Date.now();
+  // GC enquanto estamos aqui — evita storage crescer pra sempre
+  for (const k of Object.keys(cache)) {
+    if (!cache[k] || now - cache[k].cachedAt >= SHOPIFY_CACHE_TTL_MS) {
+      delete cache[k];
+    }
+  }
+  cache[id] = { product, cachedAt: now };
+  writeShopifyStorage(cache);
+}
+
+// Hidrata uma vez no load do módulo. Tauri/Vite sempre têm localStorage.
+hydrateShopifyCacheFromStorage();
+
 async function tryFetchShopify(
   productId: string,
 ): Promise<{ ok: true; product: ShopifyProduct | null } | { ok: false }> {
@@ -188,7 +260,10 @@ async function loadShopifyProduct(
     for (let attempt = 0; attempt < 3; attempt++) {
       const r = await tryFetchShopify(productId);
       if (r.ok) {
-        if (r.product) shopifyByProductId.set(productId, r.product);
+        if (r.product) {
+          shopifyByProductId.set(productId, r.product);
+          persistShopifyEntry(productId, r.product);
+        }
         // Se r.product === null (produto realmente não existe), não cacheamos.
         // Próximas chamadas vão tentar de novo — desperdício pequeno em
         // troca de consistência forte.
@@ -219,6 +294,11 @@ export function clearLookupCaches(): void {
   unifiedLoading.clear();
   shopifyByProductId.clear();
   shopifyLoading.clear();
+  try {
+    localStorage.removeItem(SHOPIFY_CACHE_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -229,6 +309,11 @@ export function clearLookupCaches(): void {
 export function clearShopifyCache(): void {
   shopifyByProductId.clear();
   shopifyLoading.clear();
+  try {
+    localStorage.removeItem(SHOPIFY_CACHE_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -266,6 +351,7 @@ export async function getEansForBatch(
     missingSizes: [...input.sizes],
     shopifyProduct: null,
     unifiedProductId: null,
+    shopifyFallbackAvailable: false,
   });
 
   try {
@@ -299,10 +385,30 @@ export async function getEansForBatch(
 
     const stillMissing = input.sizes.filter((sz) => !eans[sz]);
     let shopifyProduct: EanLookupResult["shopifyProduct"] = null;
+    let shopifyFallbackAvailable = false;
 
     // 3. Shopify fallback (cached por shopify_product_id)
-    if (stillMissing.length > 0) {
-      const product = await loadShopifyProduct(shopifyId);
+    //
+    // Se o caller pediu skipShopifyFallback E não temos cache em memória
+    // (nem hidratação do localStorage), pulamos a edge function e marcamos
+    // que o lookup pode ser completado depois — UI mostra "Buscar no Shopify".
+    const inMemoryShopify = shopifyByProductId.get(shopifyId);
+    const canUseCachedShopify = inMemoryShopify !== undefined;
+    const shouldFetchShopify =
+      stillMissing.length > 0 &&
+      (canUseCachedShopify || !input.skipShopifyFallback);
+
+    if (stillMissing.length === 0) {
+      // Tudo coberto pelo unified local — sintetiza display do designName.
+      shopifyProduct = {
+        id: shopifyId,
+        title: designName,
+        color: input.shirtColor ?? null,
+      };
+    } else if (shouldFetchShopify) {
+      const product = canUseCachedShopify
+        ? inMemoryShopify
+        : await loadShopifyProduct(shopifyId);
       if (product?.variants?.length) {
         const targetColor = normalize(input.shirtColor);
         const detectedColors = new Set<string>();
@@ -353,11 +459,9 @@ export async function getEansForBatch(
         };
       }
     } else {
-      shopifyProduct = {
-        id: shopifyId,
-        title: designName,
-        color: input.shirtColor ?? null,
-      };
+      // stillMissing > 0 e Shopify foi pulado (sem cache em memória) —
+      // marca pra UI oferecer "Buscar no Shopify" sob demanda.
+      shopifyFallbackAvailable = true;
     }
 
     return {
@@ -367,6 +471,7 @@ export async function getEansForBatch(
       missingSizes: input.sizes.filter((sz) => !eans[sz]),
       shopifyProduct,
       unifiedProductId,
+      shopifyFallbackAvailable,
     };
   } catch (e) {
     console.warn("[ean13Lookup] getEansForBatch threw:", e);

@@ -1,5 +1,5 @@
 import { supabase } from "../lib/supabase";
-import type { PrintJobItem } from "../lib/itag/printJob";
+import type { PrintJobItem } from "../lib/itag/iprint";
 
 export type RfidPrintJobStatus =
   | "queued"
@@ -25,6 +25,28 @@ export type RfidPrintJob = {
   completed_at: string | null;
   error_message: string | null;
   audit_payload: unknown;
+};
+
+export type EpcInventoryRow = {
+  epc: string;
+  batch_id: string;
+  batch_code: string;
+  size: string;
+  ean13: string;
+  sku: string | null;
+  codigo_inventario_itag: number | null;
+  job_id: string | null;
+  situacao_atual: number;
+  printed_at: string;
+  moved_at: string | null;
+  moved_to_situacao: number | null;
+  moved_by: string | null;
+};
+
+export type JobAwaitingMovimentacao = {
+  job: RfidPrintJob;
+  pendingCount: number;
+  totalCount: number;
 };
 
 /**
@@ -115,4 +137,142 @@ export async function markFailed(jobId: string, errorMessage: string) {
     })
     .eq("id", jobId);
   if (error) throw error;
+}
+
+/**
+ * Persiste o mapping EPC → lote depois que a iTAG retornou os EPCs queimados.
+ * Distribui os EPCs entre os items na ordem em que foram enviados (a iTAG
+ * preserva ordem do payload). Usa `upsert` em `epc` pra ser idempotente —
+ * caso a função seja chamada 2x pro mesmo job (retry), não duplica row.
+ */
+export async function saveEpcInventory(params: {
+  jobId: string;
+  batchId: string;
+  batchCode: string;
+  items: PrintJobItem[];
+  epcs: string[];
+  codigoInventarioItag: number | null;
+}): Promise<{ inserted: number; skipped: number }> {
+  if (params.epcs.length === 0) return { inserted: 0, skipped: 0 };
+
+  // Expande items pra EPCs individuais respeitando quantidade
+  type Row = {
+    epc: string;
+    batch_id: string;
+    batch_code: string;
+    size: string;
+    ean13: string;
+    sku: string | null;
+    codigo_inventario_itag: number | null;
+    job_id: string;
+    situacao_atual: number;
+  };
+  const rows: Row[] = [];
+  let epcIdx = 0;
+  for (const item of params.items) {
+    for (let k = 0; k < item.quantity && epcIdx < params.epcs.length; k++) {
+      rows.push({
+        epc: params.epcs[epcIdx++],
+        batch_id: params.batchId,
+        batch_code: params.batchCode,
+        size: item.size,
+        ean13: item.ean13,
+        sku: item.sku ?? null,
+        codigo_inventario_itag: params.codigoInventarioItag,
+        job_id: params.jobId,
+        situacao_atual: 2, // default — "impresso"; situação real vem do iTAG
+      });
+    }
+  }
+  const skipped = params.epcs.length - rows.length;
+
+  if (rows.length === 0) return { inserted: 0, skipped };
+
+  // Upsert por epc (PK). Em conflito mantém a row existente — não sobrescreve
+  // job_id/batch_id que possam ter sido populados em outra estação.
+  const { error } = await supabase
+    .from("rfid_epc_inventory")
+    .upsert(rows, { onConflict: "epc", ignoreDuplicates: true });
+  if (error) throw error;
+  return { inserted: rows.length, skipped };
+}
+
+/**
+ * Lista EPCs de um job específico. Usado pelo handler de movimentação.
+ */
+export async function fetchEpcsByJob(jobId: string): Promise<EpcInventoryRow[]> {
+  const { data, error } = await supabase
+    .from("rfid_epc_inventory")
+    .select(
+      "epc,batch_id,batch_code,size,ean13,sku,codigo_inventario_itag,job_id,situacao_atual,printed_at,moved_at,moved_to_situacao,moved_by",
+    )
+    .eq("job_id", jobId);
+  if (error) throw error;
+  return (data ?? []) as EpcInventoryRow[];
+}
+
+/**
+ * Marca uma lista de EPCs como movimentados localmente. Chamar SÓ depois
+ * que o `itag_iprint_movimentar` Rust devolveu OK — senão o estado local
+ * fica fora de sincronia com o iTAG.
+ */
+export async function markMoved(params: {
+  epcs: string[];
+  situacaoDestino: number;
+  operatorId: string;
+}): Promise<void> {
+  if (params.epcs.length === 0) return;
+  const { error } = await supabase
+    .from("rfid_epc_inventory")
+    .update({
+      situacao_atual: params.situacaoDestino,
+      moved_at: new Date().toISOString(),
+      moved_to_situacao: params.situacaoDestino,
+      moved_by: params.operatorId,
+    })
+    .in("epc", params.epcs);
+  if (error) throw error;
+}
+
+/**
+ * Lista jobs `done` que ainda têm EPCs com moved_at IS NULL. Pra UI mostrar
+ * "Aguardando movimentação" — o operador clica e a gente move pro estoque.
+ *
+ * Implementação simples (não otimizada): busca jobs done recentes, depois pra
+ * cada um conta EPCs pendentes. Volume é pequeno (dezenas/dia), aceita-se.
+ */
+export async function fetchJobsAwaitingMovimentacao(): Promise<
+  JobAwaitingMovimentacao[]
+> {
+  const since = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+  const { data: jobs, error: jobsErr } = await supabase
+    .from("rfid_print_jobs")
+    .select(ACTIVE_COLUMNS)
+    .eq("status", "done")
+    .gte("completed_at", since)
+    .order("completed_at", { ascending: false })
+    .limit(50);
+  if (jobsErr) throw jobsErr;
+  if (!jobs || jobs.length === 0) return [];
+
+  const out: JobAwaitingMovimentacao[] = [];
+  for (const j of jobs as RfidPrintJob[]) {
+    const { count: total, error: totalErr } = await supabase
+      .from("rfid_epc_inventory")
+      .select("epc", { count: "exact", head: true })
+      .eq("job_id", j.id);
+    if (totalErr) continue;
+    const { count: pending, error: pendErr } = await supabase
+      .from("rfid_epc_inventory")
+      .select("epc", { count: "exact", head: true })
+      .eq("job_id", j.id)
+      .is("moved_at", null);
+    if (pendErr) continue;
+    const pendingCount = pending ?? 0;
+    const totalCount = total ?? 0;
+    if (pendingCount > 0) {
+      out.push({ job: j, pendingCount, totalCount });
+    }
+  }
+  return out;
 }

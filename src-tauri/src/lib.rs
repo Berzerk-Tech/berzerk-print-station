@@ -1,4 +1,5 @@
 mod itag_client;
+mod itag_iprint;
 mod oauth_loopback;
 mod usb_devices;
 
@@ -14,6 +15,10 @@ pub fn run() {
             itag_client::itag_send_command,
             itag_client::itag_poll_tags,
             itag_client::itag_reinventory,
+            itag_iprint::itag_iprint_ping,
+            itag_iprint::itag_iprint_gerar_rfid,
+            itag_iprint::itag_iprint_query_inventory,
+            itag_iprint::itag_iprint_movimentar,
             usb_devices::list_serial_ports,
         ])
         .run(tauri::generate_context!())

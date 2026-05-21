@@ -1,4 +1,4 @@
-import type { PrintJobItem } from "./itag/printJob";
+import type { PrintJobItem } from "./itag/iprint";
 
 export type MarginMode = "none" | "global_percent" | "per_size_fixed";
 

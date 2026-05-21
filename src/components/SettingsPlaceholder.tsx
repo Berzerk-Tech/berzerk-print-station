@@ -14,6 +14,13 @@ import {
 } from "../lib/devices";
 import { pingItag, type ConnectionStatus } from "../lib/rfid";
 import { listSerialPorts, describePort, type SerialPortInfo } from "../lib/usb";
+import {
+  getIprintConfig,
+  setIprintConfig,
+  toRustConfig,
+  type IprintConfig,
+} from "../services/iprintConfig";
+import { invoke } from "@tauri-apps/api/core";
 
 type Props = { onBack: () => void };
 
@@ -51,6 +58,11 @@ export function SettingsPlaceholder({ onBack }: Props) {
             reader={config.reader}
             onSave={(r) => { setReader(r); refresh(); }}
           />
+        </div>
+
+        <div style={section}>
+          <SectionHeader kicker="Integração" label="iTAG iPrint" />
+          <IprintCard />
         </div>
 
         <div style={section}>
@@ -427,6 +439,205 @@ function ReaderCard({
           >
             Salvar alterações
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// === iTAG iPrint Card ===
+
+function IprintCard() {
+  const [draft, setDraft] = useState<IprintConfig>(() => getIprintConfig());
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ConnectionStatus | null>(null);
+  const initial = useState(() => getIprintConfig())[0];
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const status = await invoke<ConnectionStatus>("itag_iprint_ping", {
+        config: toRustConfig(draft),
+      });
+      setTestResult(status);
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        host: draft.baseUrl,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  function save() {
+    setIprintConfig(draft);
+  }
+
+  return (
+    <div style={configCard}>
+      <Field label="URL base" hint="Endpoint REST do iTAG (sem barra no final)">
+        <input
+          style={input}
+          className="berzerk-input"
+          value={draft.baseUrl}
+          onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
+          placeholder="http://itag2.itagalert.com.br/itagalert_integracao"
+        />
+      </Field>
+
+      <Field label="Usuário" hint="Basic auth">
+        <input
+          style={input}
+          className="berzerk-input"
+          value={draft.basicUser}
+          onChange={(e) => setDraft({ ...draft, basicUser: e.target.value })}
+        />
+      </Field>
+
+      <Field label="Senha" hint="Basic auth · armazenada localmente">
+        <input
+          type="password"
+          style={input}
+          className="berzerk-input"
+          value={draft.basicPass}
+          onChange={(e) => setDraft({ ...draft, basicPass: e.target.value })}
+        />
+      </Field>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <Field label="Código Empresa" hint="Path /gerarRFID/{empresa}/{filial}">
+          <input
+            type="number"
+            min={0}
+            style={input}
+            className="berzerk-input"
+            value={draft.codigoEmpresa}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                codigoEmpresa: parseInt(e.target.value, 10) || 0,
+              })
+            }
+          />
+        </Field>
+        <Field label="Filial" hint="Idem">
+          <input
+            type="number"
+            min={0}
+            style={input}
+            className="berzerk-input"
+            value={draft.filial}
+            onChange={(e) =>
+              setDraft({ ...draft, filial: parseInt(e.target.value, 10) || 0 })
+            }
+          />
+        </Field>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+        <Field label="Empresa origem" hint="Movimentação">
+          <input
+            type="number"
+            min={0}
+            style={input}
+            className="berzerk-input"
+            value={draft.empresaOrigem}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                empresaOrigem: parseInt(e.target.value, 10) || 0,
+              })
+            }
+          />
+        </Field>
+        <Field label="Empresa destino" hint="Movimentação">
+          <input
+            type="number"
+            min={0}
+            style={input}
+            className="berzerk-input"
+            value={draft.empresaDestino}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                empresaDestino: parseInt(e.target.value, 10) || 0,
+              })
+            }
+          />
+        </Field>
+        <Field label="Situação destino" hint="Ex.: 4 = estoque">
+          <input
+            type="number"
+            min={0}
+            style={input}
+            className="berzerk-input"
+            value={draft.situacaoDestino}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                situacaoDestino: parseInt(e.target.value, 10) || 0,
+              })
+            }
+          />
+        </Field>
+      </div>
+
+      <div style={cardActions}>
+        <button
+          type="button"
+          style={btnGhost}
+          className="berzerk-btn-ghost"
+          onClick={handleTest}
+          disabled={testing}
+        >
+          {testing ? "Testando…" : "Testar conexão"}
+        </button>
+        {dirty && (
+          <>
+            <button
+              type="button"
+              style={btnGhost}
+              className="berzerk-btn-ghost"
+              onClick={() => setDraft(initial)}
+            >
+              Descartar
+            </button>
+            <button
+              type="button"
+              style={btnPrimary}
+              className="berzerk-btn-primary"
+              onClick={save}
+            >
+              Salvar
+            </button>
+          </>
+        )}
+      </div>
+
+      {testResult && (
+        <div
+          style={{
+            ...testBox,
+            background: testResult.ok ? "var(--success-bg)" : "var(--danger-bg)",
+            color: testResult.ok ? "var(--success-text)" : "var(--danger-text)",
+            borderColor: testResult.ok
+              ? "var(--success-border)"
+              : "var(--danger-border)",
+          }}
+        >
+          <span style={testIcon}>{testResult.ok ? "●" : "○"}</span>
+          <div style={testCopy}>
+            <strong style={testTitle}>
+              {testResult.ok ? "iTAG respondeu" : "Não consegui conectar"}
+            </strong>
+            {testResult.message && (
+              <code style={testDetail}>{testResult.message}</code>
+            )}
+          </div>
         </div>
       )}
     </div>
