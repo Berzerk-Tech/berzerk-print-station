@@ -14,8 +14,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const PRINT_TIMEOUT_SECS: u64 = 30;
-const QUERY_TIMEOUT_SECS: u64 = 8;
+const PRINT_TIMEOUT_SECS: u64 = 60;
+const QUERY_TIMEOUT_SECS: u64 = 30;
 const POLL_INTERVAL_MS: u64 = 800;
 const POLL_MAX_ATTEMPTS: u32 = 12; // ~10s total
 
@@ -126,11 +126,17 @@ pub async fn itag_iprint_ping(config: IprintConfig) -> ConnectionStatus {
         }
     };
 
+    // Predicate restritivo: busca por inventário com codigoInventario = -1
+    // (não existe). Servidor responde rápido com page vazia usando o índice,
+    // sem precisar paginar a tabela inteira.
+    let ping_predicate = serde_json::json!({
+        "codigoInventario": { "valorCampo": -1, "contem": false }
+    });
     let resp = client
         .post(&url)
         .basic_auth(&config.basic_user, Some(&config.basic_pass))
         .header("Content-Type", "application/json")
-        .body("{}")
+        .json(&ping_predicate)
         .send()
         .await;
 
