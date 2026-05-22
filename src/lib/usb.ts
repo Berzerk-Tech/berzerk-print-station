@@ -28,9 +28,9 @@ export async function listSerialPorts(): Promise<SerialPortInfo[]> {
 
 /**
  * Constrói um label legível pro device baseado nos campos disponíveis.
- * "Elgin L42DT (COM3)" se manufacturer+product existem
- * "USB Serial Device (COM3)" se só temos vendor:product hex
- * "COM3" no pior caso
+ * "Elgin L42DT (COM3)" — manufacturer + product preenchidos
+ * "USB 0483:5740 (COM3)" — só temos vid:pid
+ * "Porta serial sem identificação USB (COM3)" — sem nenhuma info útil
  */
 export function describePort(port: SerialPortInfo): string {
   const parts: string[] = [];
@@ -39,6 +39,10 @@ export function describePort(port: SerialPortInfo): string {
   if (parts.length === 0 && port.vid && port.pid) {
     parts.push(`USB ${port.vid}:${port.pid}`);
   }
-  if (parts.length === 0) parts.push(`Porta ${port.kind}`);
+  if (parts.length === 0) {
+    if (port.kind === "bluetooth") parts.push("Porta Bluetooth");
+    else if (port.kind === "pci") parts.push("Porta serial PCI");
+    else parts.push("Porta serial sem identificação USB");
+  }
   return `${parts.join(" ")} (${port.name})`;
 }

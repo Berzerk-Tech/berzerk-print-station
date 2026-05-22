@@ -5,8 +5,8 @@
 // nas credenciais que o operador setou em Settings → iTAG iPrint.
 //
 // Endpoints cobertos (ver PDF "Fluxo padrão de integração V1.2"):
-//   POST /iprint/gerarRFID/{codigoEmpresa}/{filial}                — solicita print
-//   POST /tagInventarioIprintItem/findPageByPredicate?page=&size=  — lista EPCs queimados
+//   POST /iprint/gerarRFID/{codigoEmpresa}/{filial}                 — solicita print
+//   POST /itagInventarioIprintItem/findPageByPredicate?page=&size=  — lista EPCs queimados
 //   PUT  /produtoIprint/alteraNumeroNotaFiscalPorListaEpcLogMovimentacao/{nf}/{situacao}/{eo}/{ed}
 //        — movimentação pós-impressão
 
@@ -101,7 +101,7 @@ fn base(config: &IprintConfig) -> String {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn itag_iprint_ping(config: IprintConfig) -> ConnectionStatus {
     let url = format!(
-        "{}/tagInventarioIprintItem/findPageByPredicate?page=0&size=1&fieldSort=referencia&direction=ASC",
+        "{}/itagInventarioIprintItem/findPageByPredicate?page=0&size=1&fieldSort=referencia&direction=ASC",
         base(&config)
     );
     let client = match build_client(QUERY_TIMEOUT_SECS) {
@@ -329,7 +329,7 @@ async fn query_inventory_raw(
     size: u32,
 ) -> Result<Vec<EpcEntry>, String> {
     let url = format!(
-        "{}/tagInventarioIprintItem/findPageByPredicate?page={}&size={}&fieldSort=referencia&direction=ASC",
+        "{}/itagInventarioIprintItem/findPageByPredicate?page={}&size={}&fieldSort=referencia&direction=ASC",
         base(config),
         page,
         size
@@ -431,15 +431,33 @@ fn extract_codigo_inventario(value: &serde_json::Value) -> Option<i64> {
 }
 
 fn extract_epcs(value: &serde_json::Value) -> Vec<String> {
-    // Array de strings no root
+    // Array no root: pode ser de strings ou de objetos com campo .epc
     if let Some(arr) = value.as_array() {
-        let parsed: Vec<String> = arr
+        let strings: Vec<String> = arr
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .filter(|s| !s.is_empty())
             .collect();
-        if !parsed.is_empty() {
-            return parsed;
+        if !strings.is_empty() {
+            return strings;
+        }
+        // Resposta real do POST /iprint/gerarRFID — array de objetos
+        // {codigo, epc, nome, grupo, tamanho, cor, ...}.
+        let from_objs: Vec<String> = arr
+            .iter()
+            .filter_map(|v| {
+                v.get("epc")
+                    .or_else(|| {
+                        v.get("itagInventarioIprintItemCompl")
+                            .and_then(|c| c.get("epc"))
+                    })
+                    .and_then(|x| x.as_str())
+                    .map(String::from)
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !from_objs.is_empty() {
+            return from_objs;
         }
     }
     // Campo "epcs" no root
@@ -501,5 +519,18 @@ mod tests {
     fn extracts_codigo_inventario_root() {
         let v = serde_json::json!({ "codigoInventario": 42 });
         assert_eq!(extract_codigo_inventario(&v), Some(42));
+    }
+
+    #[test]
+    fn extracts_epcs_from_object_array() {
+        // Resposta real do POST /iprint/gerarRFID — array de objetos com .epc
+        let v = serde_json::json!([
+            { "codigo": "4791526", "epc": "3029D6ACF4800C4000000001", "nome": "Camisa preta M" },
+            { "codigo": "4791526", "epc": "3029D6ACF4800C4000000002", "nome": "Camisa preta M" }
+        ]);
+        assert_eq!(
+            extract_epcs(&v),
+            vec!["3029D6ACF4800C4000000001", "3029D6ACF4800C4000000002"]
+        );
     }
 }

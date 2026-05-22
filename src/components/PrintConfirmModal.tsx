@@ -20,7 +20,11 @@ import type { PrintJobItem } from "../lib/itag/iprint";
 type Props = {
   resolved: ResolvedBatch;
   onCancel: () => void;
-  onConfirm: (config: ApplyMarginInput) => void;
+  onConfirm: (
+    config: ApplyMarginInput,
+    // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
+    testOverride?: { count: number },
+  ) => void;
 };
 
 export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
@@ -38,6 +42,13 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
     return m;
   });
   const [bulkInput, setBulkInput] = useState<number>(stored.perSizeDefault);
+
+  // === MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO ===
+  // Quando ativo, ignora margem e imprime só `testCount` etiquetas (1-5)
+  // pra validar o fluxo de impressão sem desperdiçar bobina.
+  const [testMode, setTestMode] = useState<boolean>(false);
+  const [testCount, setTestCount] = useState<number>(3);
+  // === FIM MODO TESTE ===
 
   const baseItems = useMemo<PrintJobItem[]>(
     () => buildPrintItems(resolved),
@@ -76,6 +87,11 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
       capValue,
       perSizeDefault: stored.perSizeDefault,
     });
+    // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
+    if (testMode) {
+      onConfirm(config, { count: testCount });
+      return;
+    }
     onConfirm(config);
   }
 
@@ -112,6 +128,43 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
             )}
           </span>
         </div>
+
+        {/* === MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO === */}
+        <div style={testBox}>
+          <label style={testHeader}>
+            <input
+              type="checkbox"
+              checked={testMode}
+              onChange={(e) => setTestMode(e.target.checked)}
+            />
+            <span style={testTitle}>🧪 Modo teste</span>
+            <span style={testHint}>
+              imprime só algumas etiquetas pra validar o fluxo
+            </span>
+          </label>
+          {testMode && (
+            <div style={testControls}>
+              <span style={testControlsLabel}>Quantidade</span>
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={testCount}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  if (Number.isFinite(n))
+                    setTestCount(Math.max(1, Math.min(5, n)));
+                }}
+                style={numInput}
+              />
+              <span style={unitTag}>etiqueta{testCount === 1 ? "" : "s"}</span>
+              <span style={testNote}>
+                · ignora margem · usa o 1º tamanho do lote
+              </span>
+            </div>
+          )}
+        </div>
+        {/* === FIM MODO TESTE === */}
 
         <div style={sectionLabelWrap}>
           <span style={sectionLabel}>Margem de segurança</span>
@@ -703,3 +756,56 @@ const confirmBtn: CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
 };
+
+// === MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO ===
+const testBox: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  padding: "12px 14px",
+  background: "rgba(251, 191, 36, 0.08)",
+  border: "1px dashed rgba(251, 191, 36, 0.6)",
+  borderRadius: 8,
+  marginBottom: 14,
+};
+
+const testHeader: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  cursor: "pointer",
+  fontSize: 13,
+};
+
+const testTitle: CSSProperties = {
+  fontWeight: 700,
+  color: "var(--text)",
+  letterSpacing: 0.3,
+};
+
+const testHint: CSSProperties = {
+  fontSize: 12,
+  color: "var(--text-secondary)",
+  fontWeight: 400,
+};
+
+const testControls: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  paddingLeft: 26,
+  flexWrap: "wrap",
+};
+
+const testControlsLabel: CSSProperties = {
+  fontSize: 12,
+  color: "var(--text-secondary)",
+  fontWeight: 500,
+};
+
+const testNote: CSSProperties = {
+  fontSize: 11,
+  color: "var(--text-muted)",
+  fontStyle: "italic",
+};
+// === FIM MODO TESTE ===

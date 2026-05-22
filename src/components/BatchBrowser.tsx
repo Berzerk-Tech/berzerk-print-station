@@ -268,7 +268,11 @@ export function BatchBrowser({
   }, []);
 
   const confirmAndPrint = useCallback(
-    async (marginConfig: ApplyMarginInput) => {
+    async (
+      marginConfig: ApplyMarginInput,
+      // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
+      testOverride?: { count: number },
+    ) => {
       const resolved = pendingConfirm;
       if (!resolved) return;
       setPendingConfirm(null);
@@ -282,7 +286,12 @@ export function BatchBrowser({
       });
 
       const baseItems = buildPrintItems(resolved);
-      const items = applyMargin(baseItems, marginConfig);
+      let items = applyMargin(baseItems, marginConfig);
+      // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
+      // Sobrescreve a lista: 1 único item com `count` etiquetas no 1º tamanho.
+      if (testOverride && items.length > 0) {
+        items = [{ ...items[0], quantity: testOverride.count }];
+      }
       const totalMargined = items.reduce((sum, i) => sum + i.quantity, 0);
 
       let jobId: string;
