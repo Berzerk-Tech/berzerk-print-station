@@ -88,12 +88,23 @@ pub struct ConnectionStatus {
 fn build_client(timeout: u64) -> reqwest::Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(timeout))
-        // iTAG é HTTP plain (sem TLS), reqwest aceita; rustls não atrapalha
         .build()
 }
 
 fn base(config: &IprintConfig) -> String {
     config.base_url.trim_end_matches('/').to_string()
+}
+
+/// Formata reqwest::Error com a chain de causas em vez de só a primeira
+/// linha — preserva diagnósticos de TLS, DNS, timeout, etc.
+fn fmt_err(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        out.push_str(&format!(" → {}", s));
+        cur = s.source();
+    }
+    out
 }
 
 /// Ping inofensivo: faz uma busca paginada de 1 item no inventário
@@ -142,7 +153,7 @@ pub async fn itag_iprint_ping(config: IprintConfig) -> ConnectionStatus {
         Err(e) => ConnectionStatus {
             ok: false,
             host: config.base_url,
-            message: Some(format!("conexão falhou: {}", e)),
+            message: Some(format!("conexão falhou: {}", fmt_err(&e))),
         },
     }
 }
@@ -181,13 +192,13 @@ pub async fn itag_iprint_gerar_rfid(
         .json(&items)
         .send()
         .await
-        .map_err(|e| format!("iprint_call: requisição falhou — {}", e))?;
+        .map_err(|e| format!("iprint_call: requisição falhou — {}", fmt_err(&e)))?;
 
     let status = resp.status();
     let body = resp
         .text()
         .await
-        .map_err(|e| format!("iprint_call: leitura body falhou — {}", e))?;
+        .map_err(|e| format!("iprint_call: leitura body falhou — {}", fmt_err(&e)))?;
 
     if !status.is_success() {
         let preview = body.chars().take(300).collect::<String>();
@@ -270,7 +281,7 @@ pub async fn itag_iprint_movimentar(
         .json(&epcs)
         .send()
         .await
-        .map_err(|e| format!("movimentar: requisição falhou — {}", e))?;
+        .map_err(|e| format!("movimentar: requisição falhou — {}", fmt_err(&e)))?;
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
@@ -345,13 +356,13 @@ async fn query_inventory_raw(
         .json(&predicate)
         .send()
         .await
-        .map_err(|e| format!("query_inventory: req falhou — {}", e))?;
+        .map_err(|e| format!("query_inventory: req falhou — {}", fmt_err(&e)))?;
 
     let status = resp.status();
     let body = resp
         .text()
         .await
-        .map_err(|e| format!("query_inventory: body falhou — {}", e))?;
+        .map_err(|e| format!("query_inventory: body falhou — {}", fmt_err(&e)))?;
 
     if !status.is_success() {
         let preview = body.chars().take(300).collect::<String>();

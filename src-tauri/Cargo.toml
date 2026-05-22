@@ -1,6 +1,6 @@
 [package]
 name = "berzerk-rfid"
-version = "0.1.9"
+version = "0.1.10"
 description = "Berzerk RFID — estação industrial de etiquetagem e expedição"
 authors = ["Berzerk Tech"]
 edition = "2021"
@@ -20,7 +20,10 @@ tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tiny_http = "0.12"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# native-tls (não rustls): no Windows usa SChannel — mesmo trust store do
+# Chrome — então certs aceitos no browser passam aqui também. Rustls é
+# mais estrito e rejeitava certs do iTAG (berzerk.itagalert.com.br).
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serialport = "4"
