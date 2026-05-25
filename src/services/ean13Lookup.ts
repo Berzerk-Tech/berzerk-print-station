@@ -13,6 +13,14 @@ export type EanLookupResult = {
     title: string;
     color: string | null;
   } | null;
+  /**
+   * Nome canônico do produto no Shopify (`unified_products.shopify_product_name`,
+   * cacheado de `shopify_product_designs.shopify_product_title`). É a "Referência
+   * Shopify" — string única já combinada (ex: "Oversized - Hello Kitty"). Usada
+   * como nome impresso na etiqueta quando não há Referência Tiny. null = sem
+   * cache resolvido pro produto.
+   */
+  shopifyReference: string | null;
   unifiedProductId: string | null;
   /**
    * True quando sobraram tamanhos sem EAN local E a chamada pro Shopify foi
@@ -113,6 +121,7 @@ async function loadDesignTemplates(): Promise<void> {
 type UnifiedProductEntry = {
   unifiedProductId: string | null;
   barcodes: Record<string, string>;
+  shopifyProductName: string | null;
 };
 
 const unifiedByShopify = new Map<string, UnifiedProductEntry>();
@@ -125,7 +134,7 @@ async function loadUnifiedProduct(shopifyId: string): Promise<void> {
     try {
       const { data } = await supabase
         .from("unified_products")
-        .select("id, overrides")
+        .select("id, overrides, shopify_product_name")
         .eq("shopify_product_id", shopifyId)
         .limit(1)
         .maybeSingle();
@@ -133,6 +142,7 @@ async function loadUnifiedProduct(shopifyId: string): Promise<void> {
         unifiedByShopify.set(shopifyId, {
           unifiedProductId: null,
           barcodes: {},
+          shopifyProductName: null,
         });
         return;
       }
@@ -146,15 +156,22 @@ async function loadUnifiedProduct(shopifyId: string): Promise<void> {
           barcodes[size.toUpperCase()] = ean.trim();
         }
       }
+      const shopifyProductName =
+        typeof data.shopify_product_name === "string" &&
+        data.shopify_product_name.trim()
+          ? data.shopify_product_name.trim()
+          : null;
       unifiedByShopify.set(shopifyId, {
         unifiedProductId: data.id as string,
         barcodes,
+        shopifyProductName,
       });
     } catch (e) {
       console.warn("[ean13Lookup] loadUnifiedProduct failed:", e);
       unifiedByShopify.set(shopifyId, {
         unifiedProductId: null,
         barcodes: {},
+        shopifyProductName: null,
       });
     } finally {
       unifiedLoading.delete(shopifyId);
@@ -350,6 +367,7 @@ export async function getEansForBatch(
     sources: {},
     missingSizes: [...input.sizes],
     shopifyProduct: null,
+    shopifyReference: null,
     unifiedProductId: null,
     shopifyFallbackAvailable: false,
   });
@@ -369,6 +387,7 @@ export async function getEansForBatch(
     const local = unifiedByShopify.get(shopifyId);
     const localBarcodes = local?.barcodes ?? {};
     const unifiedProductId = local?.unifiedProductId ?? null;
+    const shopifyReference = local?.shopifyProductName ?? null;
 
     const eans: Record<string, string> = {};
     const skus: Record<string, string> = {};
@@ -470,6 +489,7 @@ export async function getEansForBatch(
       sources,
       missingSizes: input.sizes.filter((sz) => !eans[sz]),
       shopifyProduct,
+      shopifyReference,
       unifiedProductId,
       shopifyFallbackAvailable,
     };

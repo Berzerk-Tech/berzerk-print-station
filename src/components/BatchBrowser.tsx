@@ -95,6 +95,7 @@ async function resolveAllWithConcurrency(
             isPrintable: false,
             shopifyTitle: batches[i].design_name,
             shopifyColor: batches[i].shirt_color,
+            shopifyReference: null,
             shopifyFallbackAvailable: false,
           };
         }

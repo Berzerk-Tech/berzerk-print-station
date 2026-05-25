@@ -7,11 +7,19 @@ import {
   type EanSource,
 } from "./ean13Lookup";
 import type { PrintJobItem } from "../lib/itag/iprint";
+import { formatLabelDescription } from "../lib/labelFormatter";
 
 export type ProductionBatch = {
   id: string;
   batch_code: string;
   design_name: string | null;
+  /** Tipo/modelo do produto (ex: "Oversized"). Vem de silk_records. Parte do
+   *  nome Shopify (fallback) impresso na etiqueta. */
+  product_name: string | null;
+  /** Referência Tiny do lote (ex: "Oversized - hello kitty"). Quando presente,
+   *  é a FONTE DA VERDADE do nome impresso (ver labelFormatter). null = lote
+   *  não vinculado ao Tiny → cai no nome Shopify. */
+  tiny_reference: string | null;
   shirt_color: string | null;
   sizes: GradeEntry[];
   total_pieces: number;
@@ -28,6 +36,9 @@ export type ResolvedBatch = {
   isPrintable: boolean;
   shopifyTitle: string | null;
   shopifyColor: string | null;
+  /** Referência Shopify (`unified_products.shopify_product_name`). Nome único
+   *  combinado, fonte do nome impresso quando não há Tiny. Ver labelFormatter. */
+  shopifyReference: string | null;
   /**
    * True quando o resolve foi feito com `skipShopifyFallback` e ainda tem
    * tamanhos faltando. UI pode oferecer "Buscar no Shopify" pra resolver
@@ -57,7 +68,7 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
   // 1. silk_records → metadata + descoberta de batch_ids confirmados
   const { data: silks, error: silksErr } = await supabase
     .from("silk_records")
-    .select("batch_id, batch_code, shirt_color, created_at")
+    .select("batch_id, batch_code, shirt_color, product_name, created_at")
     .eq("status", "recebimento_confirmado")
     .order("created_at", { ascending: false })
     .limit(3000);
@@ -67,6 +78,7 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
   type Meta = {
     batch_code: string | null;
     shirt_color: string | null;
+    product_name: string | null;
     created_at: string;
   };
   const metaByBatch = new Map<string, Meta>();
@@ -77,12 +89,15 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
       metaByBatch.set(s.batch_id, {
         batch_code: s.batch_code,
         shirt_color: s.shirt_color,
+        product_name: s.product_name,
         created_at: s.created_at,
       });
     } else {
       if (!existing.batch_code && s.batch_code) existing.batch_code = s.batch_code;
       if (!existing.shirt_color && s.shirt_color)
         existing.shirt_color = s.shirt_color;
+      if (!existing.product_name && s.product_name)
+        existing.product_name = s.product_name;
     }
   }
 
@@ -136,6 +151,11 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
       id: pb.id,
       batch_code: meta.batch_code ?? `LOTE ${pb.id.slice(0, 8)}`,
       design_name: pb.design_name,
+      product_name: meta.product_name,
+      // TODO(tiny): ligar quando o industrial publicar a coluna da Referência
+      // Tiny. Trocar por `meta.tiny_reference` (e adicionar ao select/Meta do
+      // silk_records). Enquanto null, etiqueta usa o nome Shopify.
+      tiny_reference: null,
       shirt_color: meta.shirt_color ?? fabricColor,
       sizes,
       total_pieces,
@@ -163,6 +183,7 @@ export async function resolveBatch(
     isPrintable: false,
     shopifyTitle: batch.design_name,
     shopifyColor: batch.shirt_color,
+    shopifyReference: null,
     shopifyFallbackAvailable: false,
   };
   if (sizes.length === 0 || !batch.design_name) return empty;
@@ -182,6 +203,7 @@ export async function resolveBatch(
       isPrintable: lookup.missingSizes.length === 0 && sizes.length > 0,
       shopifyTitle: lookup.shopifyProduct?.title ?? batch.design_name,
       shopifyColor: lookup.shopifyProduct?.color ?? batch.shirt_color,
+      shopifyReference: lookup.shopifyReference,
       shopifyFallbackAvailable: lookup.shopifyFallbackAvailable,
     };
   } catch (e) {
@@ -191,11 +213,16 @@ export async function resolveBatch(
 }
 
 export function buildPrintItems(resolved: ResolvedBatch): PrintJobItem[] {
-  const titleParts = [
-    resolved.shopifyTitle ?? resolved.batch.design_name ?? "",
-    resolved.shopifyColor ?? resolved.batch.shirt_color ?? "",
-  ].filter(Boolean);
-  const baseDesc = titleParts.join(" — ");
+  // Nome impresso = padrão Berzerk/Tiny replicado do industrial:
+  //   "{product_name} — {design_name} — {SIZE}" (Title Case, size UPPER).
+  // NÃO usar shopifyTitle/cor aqui — tem que bater 100% com o preview do
+  // industrial. Ver src/lib/labelFormatter.ts.
+  const lote = {
+    tinyReference: resolved.batch.tiny_reference,
+    shopifyReference: resolved.shopifyReference,
+    product_name: resolved.batch.product_name,
+    design_name: resolved.batch.design_name ?? "",
+  };
   return resolved.batch.sizes
     .filter((g) => resolved.eans[g.size])
     .map((g) => ({
@@ -203,7 +230,7 @@ export function buildPrintItems(resolved: ResolvedBatch): PrintJobItem[] {
       quantity: g.quantity,
       ean13: resolved.eans[g.size],
       sku: resolved.skus[g.size] ?? resolved.eans[g.size],
-      description: baseDesc ? `${baseDesc} — ${g.size}` : g.size,
+      description: formatLabelDescription(lote, g.size),
     }));
 }
 

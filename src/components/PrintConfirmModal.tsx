@@ -343,6 +343,22 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
           </table>
         </div>
 
+        {marginedItems.length > 0 && (
+          <>
+            <div style={sectionLabelWrap}>
+              <span style={sectionLabel}>EAN13 / Descrição que será impressa</span>
+            </div>
+            <div style={previewWrap}>
+              {marginedItems.map((it) => (
+                <div key={it.size} style={previewRow}>
+                  <span style={previewEan}>{it.ean13}</span>
+                  <span style={previewDesc}>{it.description}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
         <div style={summaryBox}>
           Vai imprimir <strong style={summaryNum}>{marginedTotal}</strong>{" "}
           etiquetas RFID
@@ -468,6 +484,40 @@ const sectionLabel: CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: 0.9,
   color: "var(--text-muted)",
+};
+
+const previewWrap: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  background: "var(--bg-elevated)",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  padding: "8px 12px",
+  marginBottom: 14,
+  maxHeight: 180,
+  overflowY: "auto",
+};
+
+const previewRow: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  gap: 12,
+  padding: "4px 0",
+};
+
+const previewEan: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  color: "var(--text-faint)",
+  flexShrink: 0,
+  minWidth: 108,
+};
+
+const previewDesc: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 500,
+  color: "var(--text)",
 };
 
 const segmentedToggle: CSSProperties = {
