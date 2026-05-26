@@ -73,6 +73,11 @@ export function BatchCard({
     badge = { label: "IMPRIMINDO", style: STATUS_STYLE.printing };
   } else if (isFailed) {
     badge = { label: "FALHOU", style: STATUS_STYLE.failed };
+  } else if (!batch.canPrint) {
+    badge = {
+      label: "AGUARDANDO CONFIRMAÇÃO",
+      style: { background: "var(--info-bg)", color: "var(--info-text)", borderColor: "var(--info-border)" },
+    };
   } else if (isPrintable) {
     badge = { label: STATUS_LABEL.queued.toUpperCase(), style: STATUS_STYLE.queued };
   } else {
@@ -90,6 +95,9 @@ export function BatchCard({
     const timeStr =
       min > 0 ? `${min}m ${sec.toString().padStart(2, "0")}s` : `${sec}s`;
     buttonLabel = `Imprimindo… ${timeStr}`;
+    buttonDisabled = true;
+  } else if (!batch.canPrint) {
+    buttonLabel = "Aguardando confirmação";
     buttonDisabled = true;
   } else if (isFailed) {
     buttonLabel = `Tentar de novo (${batch.total_pieces})`;
@@ -140,7 +148,7 @@ export function BatchCard({
           </div>
         )}
 
-        {!isPrintable && !isFailed && missingSizes.length > 0 && (
+        {batch.canPrint && !isPrintable && !isFailed && missingSizes.length > 0 && (
           <div style={hintBox}>
             <span>
               Faltando EAN13 nos tamanhos:{" "}
