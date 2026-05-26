@@ -12,7 +12,7 @@ import { getDeviceConfig } from "../lib/devices";
 import { BerzerkLogo } from "./BerzerkLogo";
 import { AmbientBackground } from "./AmbientBackground";
 
-export type Screen = "home" | "rfid" | "nf" | "settings";
+export type Screen = "home" | "rfid" | "nf" | "rastreio" | "settings";
 
 type Props = {
   email: string;
@@ -140,6 +140,16 @@ export function HomeMenu({ email, stationShortId, onEnter }: Props) {
             iconColor="var(--warning-text)"
             onClick={() => onEnter("nf")}
             status="preview"
+          />
+          <ModuleCard
+            label="Rastreio"
+            tagline="Consultar peça"
+            description="Lê a etiqueta RFID (ou informa o EPC) e mostra de qual lote a peça saiu"
+            icon={<IconSearch />}
+            iconBg="var(--success-bg)"
+            iconColor="var(--success-text)"
+            onClick={() => onEnter("rastreio")}
+            status="ready"
           />
         </div>
       </main>
@@ -323,6 +333,15 @@ function IconTag(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
       <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10z" />
       <line x1="7" y1="7" x2="7.01" y2="7" />
+    </svg>
+  );
+}
+
+function IconSearch(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="11" cy="11" r="7" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </svg>
   );
 }

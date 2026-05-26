@@ -212,6 +212,29 @@ export async function fetchEpcsByJob(jobId: string): Promise<EpcInventoryRow[]> 
 }
 
 /**
+ * Rastreio: dado um ou mais EPCs (etiquetas RFID lidas/digitadas), retorna as
+ * rows de inventário — o vínculo EPC → lote/SKU/tamanho. Normaliza pra
+ * UPPERCASE/trim (o leitor iTAG devolve hex maiúsculo). EPCs sem match não
+ * aparecem no resultado.
+ */
+export async function fetchEpcInventoryByEpcs(
+  epcs: string[],
+): Promise<EpcInventoryRow[]> {
+  const norm = Array.from(
+    new Set(epcs.map((e) => e.trim().toUpperCase()).filter(Boolean)),
+  );
+  if (norm.length === 0) return [];
+  const { data, error } = await supabase
+    .from("rfid_epc_inventory")
+    .select(
+      "epc,batch_id,batch_code,size,ean13,sku,codigo_inventario_itag,job_id,situacao_atual,printed_at,moved_at,moved_to_situacao,moved_by",
+    )
+    .in("epc", norm);
+  if (error) throw error;
+  return (data ?? []) as EpcInventoryRow[];
+}
+
+/**
  * Marca uma lista de EPCs como movimentados localmente. Chamar SÓ depois
  * que o `itag_iprint_movimentar` Rust devolveu OK — senão o estado local
  * fica fora de sincronia com o iTAG.

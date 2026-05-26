@@ -8,6 +8,7 @@ import { Login } from "./components/Login";
 import { BatchBrowser } from "./components/BatchBrowser";
 import { HomeMenu, type Screen } from "./components/HomeMenu";
 import { NotaFiscalPlaceholder } from "./components/NotaFiscalPlaceholder";
+import { PieceTrace } from "./components/PieceTrace";
 import { SettingsPlaceholder } from "./components/SettingsPlaceholder";
 import { UpdateBanner } from "./components/UpdateBanner";
 
@@ -84,6 +85,9 @@ export default function App() {
   }
   if (screen === "nf") {
     return withBanner(<NotaFiscalPlaceholder onBack={back} />);
+  }
+  if (screen === "rastreio") {
+    return withBanner(<PieceTrace onBack={back} />);
   }
   if (screen === "settings") {
     return withBanner(<SettingsPlaceholder onBack={back} />);
