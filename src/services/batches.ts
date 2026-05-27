@@ -98,7 +98,7 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
   const { data: silks, error: silksErr } = await supabase
     .from("silk_records")
     .select(
-      "batch_id, batch_code, shirt_color, product_name, created_at, status, volumes_count",
+      "batch_id, batch_code, shirt_color, product_name, design_name, created_at, status, volumes_count",
     )
     .in("status", [
       "recebimento_confirmado",
@@ -115,6 +115,10 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
     batch_code: string | null;
     shirt_color: string | null;
     product_name: string | null;
+    // Estampa do lote. FONTE DA VERDADE = silk_records.design_name (é o que o
+    // industrial usa — ex: "Lisa"). production_batches.design_name vem muito
+    // null, então NÃO dá pra confiar nele. Ver fallback no passo 3.
+    design_name: string | null;
     created_at: string;
     // status mais avançado entre as linhas do lote (silks de um lote andam
     // juntos, mas durante transições podem divergir — pegamos o max).
@@ -132,6 +136,7 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
         batch_code: s.batch_code,
         shirt_color: s.shirt_color,
         product_name: s.product_name,
+        design_name: s.design_name,
         created_at: s.created_at,
         statusPriority: receiptPriority(s.status),
         receiptStatus: s.status ?? "",
@@ -143,6 +148,8 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
         existing.shirt_color = s.shirt_color;
       if (!existing.product_name && s.product_name)
         existing.product_name = s.product_name;
+      if (!existing.design_name && s.design_name)
+        existing.design_name = s.design_name;
       existing.volumesSum += vol;
       const p = receiptPriority(s.status);
       if (p > existing.statusPriority) {
@@ -201,11 +208,14 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
     const total_pieces = sizes.reduce((sum, s) => sum + s.quantity, 0);
     if (sizes.length === 0 || total_pieces === 0) continue;
     const fabricColor = pb.fabric_records?.cor ?? null;
-    const thumbnail = getDesignThumbnail(pb.design_name);
+    // Estampa: silk_records.design_name (igual ao industrial) com fallback pro
+    // production_batches.design_name. silk vem populado, pb costuma ser null.
+    const designName = meta.design_name ?? pb.design_name;
+    const thumbnail = getDesignThumbnail(designName);
     result.push({
       id: pb.id,
       batch_code: meta.batch_code ?? `LOTE ${pb.id.slice(0, 8)}`,
-      design_name: pb.design_name,
+      design_name: designName,
       product_name: meta.product_name,
       // TODO(tiny): ligar quando o industrial publicar a coluna da Referência
       // Tiny. Trocar por `meta.tiny_reference` (e adicionar ao select/Meta do
