@@ -12,9 +12,12 @@ type Props = {
   resolved: ResolvedBatch;
   state: CardState;
   onPrint: (resolved: ResolvedBatch) => void;
-  /** Descarta o lote (soft-delete + apaga EPCs). Limpeza de testes/lotes que
-   *  já passaram. Quando omitido, o botão "Descartar" não aparece. */
-  onDiscard?: () => void;
+  /** Descarta SÓ as etiquetas de teste deste lote (apaga EPCs de jobs is_test
+   *  e cancela esses jobs). O lote continua na Produção. Só aparece quando
+   *  `hasTest` é true. */
+  onDiscardTest?: () => void;
+  /** True quando o lote tem impressão de teste pendente pra limpar. */
+  hasTest?: boolean;
   /**
    * Dispara um re-resolve do lote forçando o fallback do Shopify. Disponível
    * quando o load inicial pulou a edge function por performance e ainda tem
@@ -53,7 +56,8 @@ export function BatchCard({
   resolved,
   state,
   onPrint,
-  onDiscard,
+  onDiscardTest,
+  hasTest,
   onSearchShopify,
   searchingShopify,
 }: Props) {
@@ -173,13 +177,13 @@ export function BatchCard({
             <span style={totalLabel}>etiquetas</span>
           </div>
           <div style={footerActions}>
-            {onDiscard && !isPrinting && (
+            {hasTest && onDiscardTest && !isPrinting && (
               <button
-                onClick={onDiscard}
+                onClick={onDiscardTest}
                 style={discardBtn}
-                title="Descartar lote (some da Produção; apaga EPCs gravados)"
+                title="Apaga só as etiquetas de teste deste lote. O lote continua na Produção."
               >
-                Descartar
+                Descartar teste
               </button>
             )}
             <button

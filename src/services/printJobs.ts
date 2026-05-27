@@ -16,6 +16,14 @@ export type RfidPrintJob = {
   shirt_color: string | null;
   design_name: string | null;
   total_etiquetas: number;
+  /** Etiquetas REALMENTE queimadas (EPCs retornados pela iTAG). null até o job
+   *  concluir. Pode ser < total_etiquetas (impressão parcial). */
+  printed_count: number | null;
+  /** True = impressão de teste (Modo teste). Os EPCs de jobs de teste são os
+   *  únicos que o "Descartar teste" remove. */
+  is_test: boolean;
+  /** True = operador escolheu tamanhos/quantidades à mão no modal. */
+  is_manual: boolean;
   status: RfidPrintJobStatus;
   station_id: string | null;
   requested_by: string | null;
@@ -54,7 +62,7 @@ export type JobAwaitingMovimentacao = {
  * direto no card de lote (sem passar por fila do coordenador).
  */
 const ACTIVE_COLUMNS =
-  "id,batch_id,batch_code,design_name,shirt_color,total_etiquetas,status,station_id,printed_by,created_at,started_at,completed_at,error_message";
+  "id,batch_id,batch_code,design_name,shirt_color,total_etiquetas,printed_count,is_test,is_manual,status,station_id,printed_by,created_at,started_at,completed_at,error_message";
 
 /**
  * Lista jobs ainda em movimento (queued, printing, failed). Done jobs ficam
@@ -81,6 +89,8 @@ export async function createPrintJob(params: {
   operatorId: string;
   operatorEmail: string;
   stationId: string;
+  isTest?: boolean;
+  isManual?: boolean;
 }): Promise<string> {
   const now = new Date().toISOString();
   const { data, error } = await supabase
@@ -92,6 +102,8 @@ export async function createPrintJob(params: {
       shirt_color: params.shirtColor,
       design_name: params.designName,
       total_etiquetas: params.totalEtiquetas,
+      is_test: params.isTest ?? false,
+      is_manual: params.isManual ?? false,
       status: "printing",
       station_id: params.stationId,
       requested_by: params.operatorId,
@@ -105,13 +117,20 @@ export async function createPrintJob(params: {
   return data.id as string;
 }
 
-export async function markDone(jobId: string) {
+/**
+ * Conclui o job gravando a contagem REAL de etiquetas queimadas (EPCs que a
+ * iTAG devolveu). Se `printedCount < total_etiquetas`, foi impressão parcial —
+ * a UI mostra "X de Y" em vez de assumir que tudo saiu.
+ */
+export async function markDone(jobId: string, printedCount?: number) {
+  const patch: Record<string, unknown> = {
+    status: "done",
+    completed_at: new Date().toISOString(),
+  };
+  if (typeof printedCount === "number") patch.printed_count = printedCount;
   const { error } = await supabase
     .from("rfid_print_jobs")
-    .update({
-      status: "done",
-      completed_at: new Date().toISOString(),
-    })
+    .update(patch)
     .eq("id", jobId);
   if (error) throw error;
 }
@@ -195,6 +214,88 @@ export async function saveEpcInventory(params: {
     .upsert(rows, { onConflict: "epc", ignoreDuplicates: true });
   if (error) throw error;
   return { inserted: rows.length, skipped };
+}
+
+/**
+ * Conjunto de batch_ids que têm impressão de TESTE pendente (job is_test=true
+ * e não cancelado). Usado pra mostrar o botão "Descartar teste" só nos cards
+ * de lote que de fato têm etiquetas de teste pra limpar.
+ */
+export async function fetchBatchesWithTestJobs(
+  batchIds: string[],
+): Promise<Set<string>> {
+  if (batchIds.length === 0) return new Set();
+  const { data, error } = await supabase
+    .from("rfid_print_jobs")
+    .select("batch_id")
+    .eq("is_test", true)
+    .neq("status", "cancelled")
+    .in("batch_id", batchIds);
+  if (error) throw error;
+  return new Set((data ?? []).map((r) => r.batch_id as string));
+}
+
+/**
+ * Descarta as impressões de TESTE de um lote: apaga só os EPCs gravados por
+ * jobs `is_test=true` e cancela esses jobs. O LOTE permanece na Produção pra
+ * impressão real — diferente do antigo "descartar lote", que soft-deletava o
+ * lote inteiro. Requer policy de DELETE em rfid_epc_inventory (migration
+ * 20260527_descartar_lote.sql).
+ */
+export async function discardTestForBatch(batchId: string): Promise<void> {
+  const { data: jobs, error: jobsErr } = await supabase
+    .from("rfid_print_jobs")
+    .select("id")
+    .eq("is_test", true)
+    .neq("status", "cancelled")
+    .eq("batch_id", batchId);
+  if (jobsErr) throw jobsErr;
+  const jobIds = (jobs ?? []).map((j) => j.id as string);
+  if (jobIds.length === 0) return;
+
+  // Apaga os EPCs de teste ANTES de cancelar os jobs (a FK aponta job_id).
+  const { error: epcErr } = await supabase
+    .from("rfid_epc_inventory")
+    .delete()
+    .in("job_id", jobIds);
+  if (epcErr) throw epcErr;
+
+  const { error: cancelErr } = await supabase
+    .from("rfid_print_jobs")
+    .update({ status: "cancelled", completed_at: new Date().toISOString() })
+    .in("id", jobIds);
+  if (cancelErr) throw cancelErr;
+}
+
+/**
+ * Reconcilia a situação local dos EPCs com a verdade da iTAG. Recebe o que a
+ * iTAG devolveu (`itag_iprint_query_inventory`) — epc → situação — e atualiza
+ * `rfid_epc_inventory.situacao_atual`. Só toca nas rows cuja situação divergiu,
+ * pra não escrever à toa. Retorna quantas rows foram atualizadas.
+ */
+export async function reconcileSituacaoFromItag(
+  pairs: Array<{ epc: string; situacao: number }>,
+): Promise<number> {
+  let updated = 0;
+  // Agrupa por situação pra fazer 1 UPDATE por valor distinto (poucos valores).
+  const bySituacao = new Map<number, string[]>();
+  for (const { epc, situacao } of pairs) {
+    const e = epc.trim().toUpperCase();
+    if (!e) continue;
+    const arr = bySituacao.get(situacao) ?? [];
+    arr.push(e);
+    bySituacao.set(situacao, arr);
+  }
+  for (const [situacao, epcs] of bySituacao) {
+    const { error, count } = await supabase
+      .from("rfid_epc_inventory")
+      .update({ situacao_atual: situacao }, { count: "exact" })
+      .in("epc", epcs)
+      .neq("situacao_atual", situacao);
+    if (error) throw error;
+    updated += count ?? 0;
+  }
+  return updated;
 }
 
 /**

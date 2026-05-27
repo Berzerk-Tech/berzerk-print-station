@@ -38,7 +38,41 @@ export function aggregateBySize(
   }
   return Array.from(map.entries())
     .map(([size, quantity]) => ({ size, quantity }))
-    .sort((a, b) => SIZE_ORDER.indexOf(a.size) - SIZE_ORDER.indexOf(b.size));
+    .sort((a, b) => compareSizes(a.size, b.size));
 }
 
-const SIZE_ORDER = ["PP", "P", "M", "G", "GG", "XG", "XGG", "XXG", "EXG", "U"];
+/**
+ * Ordem canônica dos tamanhos (do menor pro maior). Usada pra ordenar o que
+ * vai pro iPrint — a iTAG imprime na ordem do payload, e a fábrica espera
+ * PP → P → M → G → GG → XG → XXG (e não P, depois XG, fora de ordem).
+ * Tamanhos desconhecidos caem no fim (rank = comprimento da lista).
+ */
+export const SIZE_ORDER = [
+  "PP",
+  "P",
+  "M",
+  "G",
+  "GG",
+  "XG",
+  "XGG",
+  "XXG",
+  "XXXG",
+  "EXG",
+  "U",
+];
+
+/** Posição do tamanho na ordem canônica. Desconhecido vai pro fim. */
+export function sizeRank(size: string | null | undefined): number {
+  if (!size) return SIZE_ORDER.length;
+  const i = SIZE_ORDER.indexOf(size.toUpperCase());
+  return i === -1 ? SIZE_ORDER.length : i;
+}
+
+/** Comparador pra `sort` por ordem de tamanho (desempate alfabético). */
+export function compareSizes(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  const d = sizeRank(a) - sizeRank(b);
+  return d !== 0 ? d : (a ?? "").localeCompare(b ?? "");
+}

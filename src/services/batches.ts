@@ -1,5 +1,5 @@
 import { supabase } from "../lib/supabase";
-import { parseGrade, type GradeEntry } from "../lib/grade";
+import { parseGrade, compareSizes, type GradeEntry } from "../lib/grade";
 import {
   ensureDesignTemplatesLoaded,
   getDesignThumbnail,
@@ -281,6 +281,10 @@ export function buildPrintItems(resolved: ResolvedBatch): PrintJobItem[] {
   };
   return resolved.batch.sizes
     .filter((g) => resolved.eans[g.size])
+    // Ordem canônica de tamanho (PP→P→M→G→GG→XG→XXG). A iTAG imprime na
+    // ordem do payload, então ordenamos aqui pra etiqueta sair em sequência.
+    .slice()
+    .sort((a, b) => compareSizes(a.size, b.size))
     .map((g) => ({
       size: g.size,
       quantity: g.quantity,
@@ -288,34 +292,6 @@ export function buildPrintItems(resolved: ResolvedBatch): PrintJobItem[] {
       sku: resolved.skus[g.size] ?? resolved.eans[g.size],
       description: formatLabelDescription(lote, g.size),
     }));
-}
-
-/**
- * Descarta um lote da Produção do RFID (limpeza de lotes de teste / que já
- * passaram). Soft-delete em `production_batches.deleted_at` — some da Produção
- * e do Histórico (ambos filtram `deleted_at IS NULL`), sem apagar a linha.
- *
- * Se o lote já foi impresso, os EPCs gravados (`rfid_epc_inventory`) são
- * APAGADOS junto — etiqueta descartada não deve deixar EPC órfão no inventário.
- * Apaga os EPCs ANTES do soft-delete (a FK batch é `on delete restrict`, mas
- * aqui o batch só é atualizado, não removido — a ordem garante que nenhum EPC
- * sobre apontando pro lote descartado).
- *
- * Requer policies de DELETE em rfid_epc_inventory e de UPDATE de deleted_at em
- * production_batches (ver migrations/20260527_descartar_lote.sql).
- */
-export async function discardBatch(batchId: string): Promise<void> {
-  const { error: epcErr } = await supabase
-    .from("rfid_epc_inventory")
-    .delete()
-    .eq("batch_id", batchId);
-  if (epcErr) throw epcErr;
-
-  const { error: pbErr } = await supabase
-    .from("production_batches")
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", batchId);
-  if (pbErr) throw pbErr;
 }
 
 export async function fetchTodayHistory(): Promise<PrintedBatchEntry[]> {

@@ -17,14 +17,18 @@ import {
 } from "../lib/settings";
 import type { PrintJobItem } from "../lib/itag/iprint";
 
+export type PrintOverride = {
+  // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
+  test?: { count: number };
+  /** Modo manual: operador escolheu tamanhos/quantidades à mão. Quando
+   *  presente, ignora margem e imprime exatamente esses items. */
+  manualItems?: PrintJobItem[];
+};
+
 type Props = {
   resolved: ResolvedBatch;
   onCancel: () => void;
-  onConfirm: (
-    config: ApplyMarginInput,
-    // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
-    testOverride?: { count: number },
-  ) => void;
+  onConfirm: (config: ApplyMarginInput, override?: PrintOverride) => void;
 };
 
 export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
@@ -55,6 +59,29 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
     [resolved],
   );
 
+  // === MODO MANUAL ===
+  // Operador marca quais tamanhos imprimir e a quantidade de cada um. Ignora
+  // margem. O lote vai marcado como `is_manual` no job.
+  const [manualMode, setManualMode] = useState<boolean>(false);
+  const [manualSel, setManualSel] = useState<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {};
+    for (const it of baseItems) m[it.size] = true;
+    return m;
+  });
+  const [manualQty, setManualQty] = useState<Record<string, number>>(() => {
+    const m: Record<string, number> = {};
+    for (const it of baseItems) m[it.size] = it.quantity;
+    return m;
+  });
+  const manualItems = useMemo<PrintJobItem[]>(
+    () =>
+      baseItems
+        .filter((it) => manualSel[it.size] && (manualQty[it.size] ?? 0) > 0)
+        .map((it) => ({ ...it, quantity: manualQty[it.size] ?? 0 })),
+    [baseItems, manualSel, manualQty],
+  );
+  // === FIM MODO MANUAL ===
+
   const config: ApplyMarginInput = {
     mode,
     globalPercent,
@@ -67,8 +94,12 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
     [baseItems, mode, globalPercent, capEnabled, capValue, perSize],
   );
 
+  // Items que de fato serão impressos (manual ganha da margem) — alimenta
+  // preview e resumo. Modo teste é tratado só no commit.
+  const effectiveItems = manualMode ? manualItems : marginedItems;
   const baseTotal = baseItems.reduce((s, i) => s + i.quantity, 0);
   const marginedTotal = marginedItems.reduce((s, i) => s + i.quantity, 0);
+  const effectiveTotal = effectiveItems.reduce((s, i) => s + i.quantity, 0);
   const extras = marginedTotal - baseTotal;
 
   useEffect(() => {
@@ -87,9 +118,14 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
       capValue,
       perSizeDefault: stored.perSizeDefault,
     });
+    // Prioridade: teste > manual > margem.
     // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
     if (testMode) {
-      onConfirm(config, { count: testCount });
+      onConfirm(config, { test: { count: testCount } });
+      return;
+    }
+    if (manualMode) {
+      onConfirm(config, { manualItems });
       return;
     }
     onConfirm(config);
@@ -135,7 +171,10 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
             <input
               type="checkbox"
               checked={testMode}
-              onChange={(e) => setTestMode(e.target.checked)}
+              onChange={(e) => {
+                setTestMode(e.target.checked);
+                if (e.target.checked) setManualMode(false);
+              }}
             />
             <span style={testTitle}>🧪 Modo teste</span>
             <span style={testHint}>
@@ -166,6 +205,88 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
         </div>
         {/* === FIM MODO TESTE === */}
 
+        {/* === MODO MANUAL === */}
+        <div style={manualBox}>
+          <label style={testHeader}>
+            <input
+              type="checkbox"
+              checked={manualMode}
+              onChange={(e) => {
+                setManualMode(e.target.checked);
+                if (e.target.checked) setTestMode(false);
+              }}
+            />
+            <span style={testTitle}>✋ Manual</span>
+            <span style={testHint}>
+              escolher tamanhos e quantidades à mão (ignora margem)
+            </span>
+          </label>
+          {manualMode && (
+            <div style={tableWrap}>
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={th}></th>
+                    <th style={th}>Size</th>
+                    <th style={{ ...th, textAlign: "right" }}>Grade</th>
+                    <th style={{ ...th, textAlign: "right" }}>Imprimir</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {baseItems.map((b) => {
+                    const checked = manualSel[b.size] ?? false;
+                    return (
+                      <tr key={b.size}>
+                        <td style={{ ...tdInputCell, textAlign: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) =>
+                              setManualSel({
+                                ...manualSel,
+                                [b.size]: e.target.checked,
+                              })
+                            }
+                          />
+                        </td>
+                        <td style={tdSize}>{b.size}</td>
+                        <td style={tdNum}>{b.quantity}</td>
+                        <td style={tdInputCell}>
+                          <div style={extraInputWrap}>
+                            <input
+                              type="number"
+                              min={0}
+                              max={999}
+                              value={manualQty[b.size] ?? 0}
+                              disabled={!checked}
+                              onChange={(e) => {
+                                const n = parseInt(e.target.value, 10);
+                                setManualQty({
+                                  ...manualQty,
+                                  [b.size]: Number.isFinite(n)
+                                    ? Math.max(0, Math.min(999, n))
+                                    : 0,
+                                });
+                              }}
+                              style={{
+                                ...inlineNumInput,
+                                opacity: checked ? 1 : 0.4,
+                              }}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        {/* === FIM MODO MANUAL === */}
+
+        {!manualMode && (
+          <>
         <div style={sectionLabelWrap}>
           <span style={sectionLabel}>Margem de segurança</span>
         </div>
@@ -342,14 +463,16 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
             </tfoot>
           </table>
         </div>
+          </>
+        )}
 
-        {marginedItems.length > 0 && (
+        {effectiveItems.length > 0 && (
           <>
             <div style={sectionLabelWrap}>
               <span style={sectionLabel}>EAN13 / Descrição que será impressa</span>
             </div>
             <div style={previewWrap}>
-              {marginedItems.map((it) => (
+              {effectiveItems.map((it) => (
                 <div key={it.size} style={previewRow}>
                   <span style={previewEan}>{it.ean13}</span>
                   <span style={previewDesc}>{it.description}</span>
@@ -360,13 +483,17 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
         )}
 
         <div style={summaryBox}>
-          Vai imprimir <strong style={summaryNum}>{marginedTotal}</strong>{" "}
+          Vai imprimir <strong style={summaryNum}>{effectiveTotal}</strong>{" "}
           etiquetas RFID
-          {extras > 0 && (
-            <span style={summaryExtras}>
-              {" "}
-              ({baseTotal} base + {extras} margem)
-            </span>
+          {manualMode ? (
+            <span style={summaryExtras}> (manual)</span>
+          ) : (
+            extras > 0 && (
+              <span style={summaryExtras}>
+                {" "}
+                ({baseTotal} base + {extras} margem)
+              </span>
+            )
           )}
         </div>
 
@@ -374,7 +501,13 @@ export function PrintConfirmModal({ resolved, onCancel, onConfirm }: Props) {
           <button onClick={onCancel} style={cancelBtn}>
             Cancelar
           </button>
-          <button onClick={commit} style={confirmBtn}>
+          <button
+            onClick={commit}
+            disabled={effectiveTotal === 0 && !testMode}
+            style={
+              effectiveTotal === 0 && !testMode ? confirmBtnDisabled : confirmBtn
+            }
+          >
             Confirmar e imprimir
           </button>
         </footer>
@@ -805,6 +938,24 @@ const confirmBtn: CSSProperties = {
   cursor: "pointer",
   fontSize: 13,
   fontWeight: 600,
+};
+
+const confirmBtnDisabled: CSSProperties = {
+  ...confirmBtn,
+  background: "var(--bg-input)",
+  color: "var(--text-muted)",
+  cursor: "not-allowed",
+};
+
+const manualBox: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  padding: "12px 14px",
+  background: "rgba(137, 180, 250, 0.07)",
+  border: "1px dashed rgba(137, 180, 250, 0.5)",
+  borderRadius: 8,
+  marginBottom: 14,
 };
 
 // === MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO ===

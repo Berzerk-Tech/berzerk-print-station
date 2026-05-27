@@ -20,7 +20,6 @@ import { getIprintConfig, toRustConfig } from "../services/iprintConfig";
 import { invoke } from "@tauri-apps/api/core";
 import {
   buildPrintItems,
-  discardBatch,
   fetchPendingBatches,
   fetchTodayHistory,
   resolveBatch,
@@ -29,7 +28,7 @@ import {
   type PrintedBatchEntry,
 } from "../services/batches";
 import { BatchCard, type CardState } from "./BatchCard";
-import { PrintConfirmModal } from "./PrintConfirmModal";
+import { PrintConfirmModal, type PrintOverride } from "./PrintConfirmModal";
 import { BackButton } from "./BackButton";
 import { AmbientBackground } from "./AmbientBackground";
 
@@ -129,6 +128,10 @@ export function BatchBrowser({
     null,
   );
   const [query, setQuery] = useState("");
+  // batch_ids que têm impressão de teste pendente — habilita "Descartar teste".
+  const [batchesWithTest, setBatchesWithTest] = useState<Set<string>>(
+    new Set(),
+  );
   const [activeJobs, setActiveJobs] = useState<RfidPrintJob[]>([]);
   const [awaitingJobs, setAwaitingJobs] = useState<JobAwaitingMovimentacao[]>(
     [],
@@ -167,6 +170,16 @@ export function BatchBrowser({
       });
       setBatches(resolved);
       setHistory(hist);
+      // Quais lotes visíveis têm impressão de teste pra limpar (botão no card).
+      // allSettled-style: falha aqui não derruba o load.
+      try {
+        const testSet = await printJobsService.fetchBatchesWithTestJobs(
+          visible.map((b) => b.id),
+        );
+        setBatchesWithTest(testSet);
+      } catch (e) {
+        console.warn("[BatchBrowser] fetchBatchesWithTestJobs failed:", e);
+      }
       setLoadError(null);
     } catch (e) {
       console.error("[BatchBrowser] load error:", e);
@@ -241,26 +254,30 @@ export function BatchBrowser({
     setPendingConfirm(resolved);
   }, []);
 
-  // Descarta um lote da Produção (limpeza de testes / lotes que já passaram):
-  // soft-delete em production_batches + apaga os EPCs já gravados. Remove das
-  // listas otimisticamente e recarrega pra refletir o estado do banco. Serve
-  // tanto pros cards (pendentes/prontos) quanto pro Histórico (já impressos).
-  const handleDiscard = useCallback(
+  // Descarta SÓ as etiquetas de teste de um lote: apaga os EPCs dos jobs
+  // is_test e cancela esses jobs. O LOTE continua na Produção pra impressão
+  // real. Recarrega pra refletir o estado do banco.
+  const handleDiscardTest = useCallback(
     async (batchId: string, batchCode: string) => {
       const ok = window.confirm(
-        `Descartar o lote ${batchCode}?\n\n` +
-          "Ele some da Produção e do Histórico. Se já tiver sido impresso, " +
-          "os EPCs gravados desse lote também serão apagados do inventário.\n\n" +
-          "Esta ação não pode ser desfeita pelo app.",
+        `Descartar as etiquetas de TESTE do lote ${batchCode}?\n\n` +
+          "Apaga só os EPCs gravados em impressões de teste. O lote continua " +
+          "na Produção pra impressão real.",
       );
       if (!ok) return;
-      setBatches((prev) => prev.filter((b) => b.batch.id !== batchId));
-      setHistory((prev) => prev.filter((h) => h.id !== batchId));
+      // Otimista: remove o lote da marca de "tem teste" pra sumir o botão.
+      setBatchesWithTest((prev) => {
+        const next = new Set(prev);
+        next.delete(batchId);
+        return next;
+      });
       try {
-        await discardBatch(batchId);
+        await printJobsService.discardTestForBatch(batchId);
       } catch (e) {
-        console.error("[BatchBrowser] discardBatch failed:", e);
-        window.alert(`Falha ao descartar ${batchCode}: ${formatError(e)}`);
+        console.error("[BatchBrowser] discardTestForBatch failed:", e);
+        window.alert(
+          `Falha ao descartar teste de ${batchCode}: ${formatError(e)}`,
+        );
       } finally {
         load(false);
       }
@@ -297,11 +314,7 @@ export function BatchBrowser({
   }, []);
 
   const confirmAndPrint = useCallback(
-    async (
-      marginConfig: ApplyMarginInput,
-      // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
-      testOverride?: { count: number },
-    ) => {
+    async (marginConfig: ApplyMarginInput, override?: PrintOverride) => {
       const resolved = pendingConfirm;
       if (!resolved) return;
       setPendingConfirm(null);
@@ -314,14 +327,18 @@ export function BatchBrowser({
         return next;
       });
 
-      const baseItems = buildPrintItems(resolved);
-      let items = applyMargin(baseItems, marginConfig);
+      const isManual = !!override?.manualItems;
+      const isTest = !!override?.test;
+      // Manual ganha da margem; teste sobrescreve tudo no fim.
+      let items = override?.manualItems
+        ? override.manualItems
+        : applyMargin(buildPrintItems(resolved), marginConfig);
       // MODO TESTE — REMOVER APÓS HOMOLOGAÇÃO
       // Sobrescreve a lista: 1 único item com `count` etiquetas no 1º tamanho.
-      if (testOverride && items.length > 0) {
-        items = [{ ...items[0], quantity: testOverride.count }];
+      if (override?.test && items.length > 0) {
+        items = [{ ...items[0], quantity: override.test.count }];
       }
-      const totalMargined = items.reduce((sum, i) => sum + i.quantity, 0);
+      const totalRequested = items.reduce((sum, i) => sum + i.quantity, 0);
 
       let jobId: string;
       try {
@@ -331,10 +348,12 @@ export function BatchBrowser({
           items,
           shirtColor: resolved.shopifyColor ?? batch.shirt_color,
           designName: batch.design_name,
-          totalEtiquetas: totalMargined,
+          totalEtiquetas: totalRequested,
           operatorId,
           operatorEmail,
           stationId,
+          isTest,
+          isManual,
         });
       } catch (e) {
         setErrors((m) => new Map(m).set(batch.id, formatError(e)));
@@ -358,7 +377,13 @@ export function BatchBrowser({
         });
 
         if (result.success) {
-          await printJobsService.markDone(jobId);
+          // Grava a contagem REAL de etiquetas queimadas (EPCs da iTAG), que
+          // pode ser < solicitado em impressão parcial. Se foi teste, o lote
+          // passa a ter teste pra limpar.
+          await printJobsService.markDone(jobId, result.count);
+          if (isTest) {
+            setBatchesWithTest((prev) => new Set(prev).add(batch.id));
+          }
         } else {
           const detail = result.stage ? ` (${result.stage})` : "";
           const msg = result.error + detail;
@@ -432,11 +457,65 @@ export function BatchBrowser({
       );
       try {
         const epcs = await printJobsService.fetchEpcsByJob(job.id);
-        const pendingEpcs = epcs
-          .filter((e) => !e.moved_at)
-          .map((e) => e.epc);
+        let pendingEpcs = epcs.filter((e) => !e.moved_at).map((e) => e.epc);
         if (pendingEpcs.length === 0) {
           // Nada a mover — refresh e sai
+          const refreshed = await printJobsService.fetchJobsAwaitingMovimentacao();
+          setAwaitingJobs(refreshed);
+          return;
+        }
+
+        // Reconcilia com a iTAG: pergunta a situação REAL dos EPCs antes de
+        // mover, em vez de confiar cego no estado local. Só move o que a iTAG
+        // confirma existir no inventário (= impresso de fato). Se a consulta
+        // falhar, segue com o estado local pra não travar a movimentação.
+        const codigoInventario = epcs.find(
+          (e) => e.codigo_inventario_itag != null,
+        )?.codigo_inventario_itag;
+        if (codigoInventario != null) {
+          try {
+            const real = await invoke<
+              Array<{ epc: string; situacao: number | null }>
+            >("itag_iprint_query_inventory", {
+              config: toRustConfig(config),
+              codigoInventario,
+              page: 0,
+              size: 500,
+            });
+            const realByEpc = new Map<string, number | null>();
+            for (const r of real) {
+              realByEpc.set(r.epc.trim().toUpperCase(), r.situacao);
+            }
+            // Atualiza situação local com a verdade da iTAG.
+            await printJobsService.reconcileSituacaoFromItag(
+              real
+                .filter((r) => r.situacao != null)
+                .map((r) => ({ epc: r.epc, situacao: r.situacao as number })),
+            );
+            // Só move o que a iTAG confirma ter impresso.
+            const confirmed = pendingEpcs.filter((e) =>
+              realByEpc.has(e.trim().toUpperCase()),
+            );
+            if (confirmed.length < pendingEpcs.length) {
+              console.warn(
+                `[BatchBrowser] reconcile: ${pendingEpcs.length - confirmed.length} EPC(s) ` +
+                  `pendentes não constam na iTAG — não serão movimentados.`,
+              );
+            }
+            pendingEpcs = confirmed;
+          } catch (recErr) {
+            console.warn(
+              "[BatchBrowser] reconcile com iTAG falhou, seguindo com estado local:",
+              recErr,
+            );
+          }
+        }
+
+        if (pendingEpcs.length === 0) {
+          window.alert(
+            `Nenhum EPC do lote ${job.batch_code} foi confirmado como impresso na iTAG. ` +
+              "Verifique a impressão antes de movimentar.",
+          );
           const refreshed = await printJobsService.fetchJobsAwaitingMovimentacao();
           setAwaitingJobs(refreshed);
           return;
@@ -736,9 +815,10 @@ export function BatchBrowser({
                       resolved={r}
                       state={cardStateFor(r.batch.id)}
                       onPrint={requestPrint}
-                      onDiscard={() =>
-                        handleDiscard(r.batch.id, r.batch.batch_code)
+                      onDiscardTest={() =>
+                        handleDiscardTest(r.batch.id, r.batch.batch_code)
                       }
+                      hasTest={batchesWithTest.has(r.batch.id)}
                       onSearchShopify={handleSearchShopify}
                       searchingShopify={searchingShopify.has(r.batch.id)}
                     />
@@ -760,9 +840,10 @@ export function BatchBrowser({
                     resolved={r}
                     state={cardStateFor(r.batch.id)}
                     onPrint={requestPrint}
-                    onDiscard={() =>
-                      handleDiscard(r.batch.id, r.batch.batch_code)
+                    onDiscardTest={() =>
+                      handleDiscardTest(r.batch.id, r.batch.batch_code)
                     }
+                    hasTest={batchesWithTest.has(r.batch.id)}
                     onSearchShopify={handleSearchShopify}
                     searchingShopify={searchingShopify.has(r.batch.id)}
                   />
@@ -795,14 +876,6 @@ export function BatchBrowser({
                       <span style={historyTime}>
                         {formatTime(h.rfid_impresso_at)}
                       </span>
-                      <button
-                        onClick={() => handleDiscard(h.id, h.batch_code)}
-                        style={cancelRowBtn}
-                        title="Descartar lote (apaga os EPCs gravados)"
-                        aria-label="Descartar lote"
-                      >
-                        ✕
-                      </button>
                     </div>
                   ))}
                 </div>
@@ -970,14 +1043,28 @@ function AwaitingMovRow({
   const completed = entry.job.completed_at
     ? formatTime(entry.job.completed_at)
     : null;
+  // Progresso REAL: totalCount = EPCs de fato gravados (impressos). Solicitado
+  // = total_etiquetas. Parcial quando saiu menos do que pediu.
+  const requested = entry.job.total_etiquetas;
+  const printed = entry.totalCount;
+  const partial = requested > 0 && printed < requested;
   return (
     <div style={queueRow}>
-      <span style={{ ...queueBadge, ...JOB_STATUS_STYLE.done }}>IMPRESSO</span>
+      <span
+        style={{
+          ...queueBadge,
+          ...(partial ? JOB_STATUS_STYLE.failed : JOB_STATUS_STYLE.done),
+        }}
+      >
+        {partial ? "PARCIAL" : "IMPRESSO"}
+      </span>
       <div style={queueInfo}>
         <div style={queueTopLine}>
           <span style={queueCode}>{entry.job.batch_code}</span>
           <span style={queueDesign}>
             {entry.job.design_name ?? "—"}
+            {entry.job.is_test && <span style={queueDot}> · 🧪 teste</span>}
+            {entry.job.is_manual && <span style={queueDot}> · ✋ manual</span>}
             {entry.job.shirt_color && (
               <>
                 <span style={queueDot}>·</span>
@@ -989,7 +1076,8 @@ function AwaitingMovRow({
       </div>
       <div style={queueMeta}>
         <span style={queueQty}>
-          {entry.pendingCount} / {entry.totalCount} pendente(s)
+          {printed} impressa{printed === 1 ? "" : "s"}
+          {partial && ` de ${requested}`} · {entry.pendingCount} a movimentar
         </span>
         {completed && <span style={queueTime}>{completed}</span>}
       </div>
