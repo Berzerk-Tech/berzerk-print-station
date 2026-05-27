@@ -12,6 +12,9 @@ type Props = {
   resolved: ResolvedBatch;
   state: CardState;
   onPrint: (resolved: ResolvedBatch) => void;
+  /** Descarta o lote (soft-delete + apaga EPCs). Limpeza de testes/lotes que
+   *  já passaram. Quando omitido, o botão "Descartar" não aparece. */
+  onDiscard?: () => void;
   /**
    * Dispara um re-resolve do lote forçando o fallback do Shopify. Disponível
    * quando o load inicial pulou a edge function por performance e ainda tem
@@ -50,6 +53,7 @@ export function BatchCard({
   resolved,
   state,
   onPrint,
+  onDiscard,
   onSearchShopify,
   searchingShopify,
 }: Props) {
@@ -73,11 +77,6 @@ export function BatchCard({
     badge = { label: "IMPRIMINDO", style: STATUS_STYLE.printing };
   } else if (isFailed) {
     badge = { label: "FALHOU", style: STATUS_STYLE.failed };
-  } else if (!batch.canPrint) {
-    badge = {
-      label: "AGUARDANDO CONFIRMAÇÃO",
-      style: { background: "var(--info-bg)", color: "var(--info-text)", borderColor: "var(--info-border)" },
-    };
   } else if (isPrintable) {
     badge = { label: STATUS_LABEL.queued.toUpperCase(), style: STATUS_STYLE.queued };
   } else {
@@ -95,9 +94,6 @@ export function BatchCard({
     const timeStr =
       min > 0 ? `${min}m ${sec.toString().padStart(2, "0")}s` : `${sec}s`;
     buttonLabel = `Imprimindo… ${timeStr}`;
-    buttonDisabled = true;
-  } else if (!batch.canPrint) {
-    buttonLabel = "Aguardando confirmação";
     buttonDisabled = true;
   } else if (isFailed) {
     buttonLabel = `Tentar de novo (${batch.total_pieces})`;
@@ -148,7 +144,7 @@ export function BatchCard({
           </div>
         )}
 
-        {batch.canPrint && !isPrintable && !isFailed && missingSizes.length > 0 && (
+        {!isPrintable && !isFailed && missingSizes.length > 0 && (
           <div style={hintBox}>
             <span>
               Faltando EAN13 nos tamanhos:{" "}
@@ -176,13 +172,24 @@ export function BatchCard({
             <span style={totalNum}>{batch.total_pieces}</span>
             <span style={totalLabel}>etiquetas</span>
           </div>
-          <button
-            onClick={() => !buttonDisabled && onPrint(resolved)}
-            disabled={buttonDisabled}
-            style={buttonDisabled ? printBtnDisabled : printBtn}
-          >
-            {buttonLabel}
-          </button>
+          <div style={footerActions}>
+            {onDiscard && !isPrinting && (
+              <button
+                onClick={onDiscard}
+                style={discardBtn}
+                title="Descartar lote (some da Produção; apaga EPCs gravados)"
+              >
+                Descartar
+              </button>
+            )}
+            <button
+              onClick={() => !buttonDisabled && onPrint(resolved)}
+              disabled={buttonDisabled}
+              style={buttonDisabled ? printBtnDisabled : printBtn}
+            >
+              {buttonLabel}
+            </button>
+          </div>
         </footer>
       </div>
     </article>
@@ -434,6 +441,23 @@ const totalLabel: CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: 0.7,
   fontWeight: 600,
+};
+
+const footerActions: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+};
+
+const discardBtn: CSSProperties = {
+  padding: "9px 14px",
+  fontSize: 12,
+  fontWeight: 600,
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  background: "transparent",
+  color: "var(--text-muted)",
+  cursor: "pointer",
 };
 
 const printBtn: CSSProperties = {

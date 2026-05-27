@@ -20,6 +20,7 @@ import { getIprintConfig, toRustConfig } from "../services/iprintConfig";
 import { invoke } from "@tauri-apps/api/core";
 import {
   buildPrintItems,
+  discardBatch,
   fetchPendingBatches,
   fetchTodayHistory,
   resolveBatch,
@@ -45,8 +46,7 @@ type Filter =
   | "blocked"
   | "queue"
   | "history"
-  | "awaiting"
-  | "awaiting_receipt";
+  | "awaiting";
 type MovingState = { startedAt: number };
 
 function formatError(e: unknown): string {
@@ -237,10 +237,36 @@ export function BatchBrowser({
   }, [hasPrintingJobs]);
 
   const requestPrint = useCallback((resolved: ResolvedBatch) => {
-    if (!resolved.batch.canPrint) return; // recebimento não confirmado
     if (!resolved.isPrintable) return;
     setPendingConfirm(resolved);
   }, []);
+
+  // Descarta um lote da Produção (limpeza de testes / lotes que já passaram):
+  // soft-delete em production_batches + apaga os EPCs já gravados. Remove das
+  // listas otimisticamente e recarrega pra refletir o estado do banco. Serve
+  // tanto pros cards (pendentes/prontos) quanto pro Histórico (já impressos).
+  const handleDiscard = useCallback(
+    async (batchId: string, batchCode: string) => {
+      const ok = window.confirm(
+        `Descartar o lote ${batchCode}?\n\n` +
+          "Ele some da Produção e do Histórico. Se já tiver sido impresso, " +
+          "os EPCs gravados desse lote também serão apagados do inventário.\n\n" +
+          "Esta ação não pode ser desfeita pelo app.",
+      );
+      if (!ok) return;
+      setBatches((prev) => prev.filter((b) => b.batch.id !== batchId));
+      setHistory((prev) => prev.filter((h) => h.id !== batchId));
+      try {
+        await discardBatch(batchId);
+      } catch (e) {
+        console.error("[BatchBrowser] discardBatch failed:", e);
+        window.alert(`Falha ao descartar ${batchCode}: ${formatError(e)}`);
+      } finally {
+        load(false);
+      }
+    },
+    [load],
+  );
 
   // Re-resolve um lote específico forçando o fallback do Shopify. Usado
   // quando o operador clica "Buscar no Shopify" em card bloqueado por
@@ -280,17 +306,6 @@ export function BatchBrowser({
       if (!resolved) return;
       setPendingConfirm(null);
       const batch = resolved.batch;
-
-      if (!batch.canPrint) {
-        // Defesa: recebimento não confirmado nunca gera job de impressão.
-        setErrors((m) =>
-          new Map(m).set(
-            batch.id,
-            "Recebimento não confirmado — impressão bloqueada.",
-          ),
-        );
-        return;
-      }
 
       setErrors((m) => {
         if (!m.has(batch.id)) return m;
@@ -379,18 +394,10 @@ export function BatchBrowser({
     matchesQuery(b.batch.design_name) ||
     matchesQuery(b.shopifyTitle);
 
-  // canPrint (recebimento confirmado) e isPrintable (cobertura de EAN) são
-  // gates independentes. Lote só imprime com os dois; sem canPrint vira
-  // "Aguardando confirmação".
-  const awaitingReceipt = batches.filter(
-    (b) => !b.batch.canPrint && batchMatches(b),
-  );
-  const ready = batches.filter(
-    (b) => b.batch.canPrint && b.isPrintable && batchMatches(b),
-  );
-  const blocked = batches.filter(
-    (b) => b.batch.canPrint && !b.isPrintable && batchMatches(b),
-  );
+  // Lote agrupado é sempre imprimível; o único gate restante é a cobertura de
+  // EAN13 (isPrintable). Sem EAN → "Faltando info".
+  const ready = batches.filter((b) => b.isPrintable && batchMatches(b));
+  const blocked = batches.filter((b) => !b.isPrintable && batchMatches(b));
   const filteredHistory = history.filter(
     (h) => !q || matchesQuery(h.batch_code) || matchesQuery(h.design_name),
   );
@@ -401,11 +408,8 @@ export function BatchBrowser({
       matchesQuery(a.job.design_name),
   );
 
-  const totalReady = batches.filter(
-    (b) => b.batch.canPrint && b.isPrintable,
-  ).length;
-  const totalAwaiting = batches.filter((b) => !b.batch.canPrint).length;
-  const totalBlocked = batches.length - totalReady - totalAwaiting;
+  const totalReady = batches.filter((b) => b.isPrintable).length;
+  const totalBlocked = batches.length - totalReady;
 
   const handleMovimentar = useCallback(
     async (entry: JobAwaitingMovimentacao) => {
@@ -490,8 +494,6 @@ export function BatchBrowser({
   const showAwaiting = filter === "all" || filter === "awaiting";
   const showReady = filter === "all" || filter === "ready";
   const showBlocked = filter === "all" || filter === "blocked";
-  const showAwaitingReceipt =
-    filter === "all" || filter === "awaiting_receipt";
   const showHistory = filter === "all" || filter === "history";
 
   const printingCount = activeJobs.filter((j) => j.status === "printing").length;
@@ -634,15 +636,6 @@ export function BatchBrowser({
             active={filter === "blocked"}
             onClick={() => toggleFilter("blocked")}
           />
-          {totalAwaiting > 0 && (
-            <Stat
-              label="aguardando"
-              value={totalAwaiting}
-              accent="info"
-              active={filter === "awaiting_receipt"}
-              onClick={() => toggleFilter("awaiting_receipt")}
-            />
-          )}
           {activeJobs.length > 0 && (
             <Stat
               label="na fila"
@@ -728,26 +721,6 @@ export function BatchBrowser({
               </Section>
             )}
 
-            {showAwaitingReceipt && awaitingReceipt.length > 0 && (
-              <Section
-                title="Aguardando confirmação"
-                count={awaitingReceipt.length}
-                accent="info"
-                hint="Lotes que chegaram cedo (com volumes contados) mas ainda não tiveram o recebimento confirmado. A impressão libera após a confirmação."
-              >
-                {awaitingReceipt.map((r) => (
-                  <BatchCard
-                    key={r.batch.id}
-                    resolved={r}
-                    state={cardStateFor(r.batch.id)}
-                    onPrint={requestPrint}
-                    onSearchShopify={handleSearchShopify}
-                    searchingShopify={searchingShopify.has(r.batch.id)}
-                  />
-                ))}
-              </Section>
-            )}
-
             {showReady && (
               <Section
                 title="Prontos pra imprimir"
@@ -763,6 +736,9 @@ export function BatchBrowser({
                       resolved={r}
                       state={cardStateFor(r.batch.id)}
                       onPrint={requestPrint}
+                      onDiscard={() =>
+                        handleDiscard(r.batch.id, r.batch.batch_code)
+                      }
                       onSearchShopify={handleSearchShopify}
                       searchingShopify={searchingShopify.has(r.batch.id)}
                     />
@@ -784,6 +760,9 @@ export function BatchBrowser({
                     resolved={r}
                     state={cardStateFor(r.batch.id)}
                     onPrint={requestPrint}
+                    onDiscard={() =>
+                      handleDiscard(r.batch.id, r.batch.batch_code)
+                    }
                     onSearchShopify={handleSearchShopify}
                     searchingShopify={searchingShopify.has(r.batch.id)}
                   />
@@ -816,6 +795,14 @@ export function BatchBrowser({
                       <span style={historyTime}>
                         {formatTime(h.rfid_impresso_at)}
                       </span>
+                      <button
+                        onClick={() => handleDiscard(h.id, h.batch_code)}
+                        style={cancelRowBtn}
+                        title="Descartar lote (apaga os EPCs gravados)"
+                        aria-label="Descartar lote"
+                      >
+                        ✕
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -825,7 +812,6 @@ export function BatchBrowser({
             {q &&
               ready.length === 0 &&
               blocked.length === 0 &&
-              awaitingReceipt.length === 0 &&
               filteredHistory.length === 0 && (
                 <EmptyState
                   text={`Nenhum lote bate com "${query}".`}
@@ -836,8 +822,6 @@ export function BatchBrowser({
               filter !== "all" &&
               ((filter === "ready" && ready.length === 0) ||
                 (filter === "blocked" && blocked.length === 0) ||
-                (filter === "awaiting_receipt" &&
-                  awaitingReceipt.length === 0) ||
                 (filter === "history" && history.length === 0) ||
                 (filter === "awaiting" && awaitingJobs.length === 0)) && (
                 <EmptyState text="Sem entradas nessa categoria." />
@@ -1357,7 +1341,7 @@ const historyList: CSSProperties = {
 
 const historyRow: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "auto auto 1fr auto auto",
+  gridTemplateColumns: "auto auto 1fr auto auto auto",
   gap: 14,
   alignItems: "center",
   padding: "8px 14px",

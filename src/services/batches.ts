@@ -25,10 +25,6 @@ export type ProductionBatch = {
   total_pieces: number;
   created_at: string;
   thumbnail_url: string | null;
-  /** True só quando o recebimento está confirmado (recebimento_confirmado).
-   *  Único estado em que o lote pode ser impresso — antes disso a grade ainda é
-   *  a planejada do corte, não a contada. */
-  canPrint: boolean;
   /** Status de recebimento do lote (o mais avançado entre as linhas de
    *  silk_records). Rótulo amigável via RECEIPT_STATUS_LABEL. */
   receiptStatus: string;
@@ -86,11 +82,12 @@ export type PrintedBatchEntry = {
 /**
  * Lista lotes prontos pra aparecer na Produção (não impressos ainda).
  *
- * Aparecem: (a) lotes `recebimento_confirmado` (printáveis, comportamento
- * histórico), ou (b) lotes em estágio inicial de recebimento
- * (`aguardando_retirada`/`enviado_recebimento`/`aguardando_autorizacao`) que já
- * tenham volumes contados na coleta (Σ `volumes_count` > 0) — esses aparecem
- * TRAVADOS (`canPrint: false`), porque a grade só vira a contada na confirmação.
+ * Aparecem (todos imprimíveis): (a) lotes `recebimento_confirmado`, ou (b)
+ * lotes em estágio inicial de recebimento (`aguardando_retirada`/
+ * `enviado_recebimento`/`aguardando_autorizacao`) que já tenham volumes
+ * contados na coleta (Σ `volumes_count` > 0) — i.e. já foram agrupados. A
+ * impressão é liberada assim que o lote é agrupado (sem esperar a confirmação
+ * do recebimento). Antes da confirmação a grade é a PLANEJADA do corte.
  *
  * Fonte da verdade do total/grade: `production_batches.grade`. silk_records dão
  * o status, os volumes e a metadata (batch_code, shirt_color, product_name).
@@ -197,8 +194,8 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
     const meta = metaByBatch.get(pb.id);
     if (!meta) continue;
     const isConfirmed = meta.statusPriority === 4; // recebimento_confirmado
-    // Filtro de volumes vale SÓ pro estágio inicial; confirmados nunca são
-    // barrados por volume (preserva o comportamento histórico).
+    // Só aparece quando agrupado: confirmados sempre; estágio inicial só com
+    // volumes contados na coleta (Σ volumes > 0). Ambos são imprimíveis.
     if (!isConfirmed && meta.volumesSum <= 0) continue;
     const sizes = parseGrade(pb.grade);
     const total_pieces = sizes.reduce((sum, s) => sum + s.quantity, 0);
@@ -219,7 +216,6 @@ export async function fetchPendingBatches(): Promise<ProductionBatch[]> {
       total_pieces,
       created_at: meta.created_at,
       thumbnail_url: thumbnail,
-      canPrint: isConfirmed,
       receiptStatus: meta.receiptStatus,
     });
   }
@@ -294,6 +290,34 @@ export function buildPrintItems(resolved: ResolvedBatch): PrintJobItem[] {
     }));
 }
 
+/**
+ * Descarta um lote da Produção do RFID (limpeza de lotes de teste / que já
+ * passaram). Soft-delete em `production_batches.deleted_at` — some da Produção
+ * e do Histórico (ambos filtram `deleted_at IS NULL`), sem apagar a linha.
+ *
+ * Se o lote já foi impresso, os EPCs gravados (`rfid_epc_inventory`) são
+ * APAGADOS junto — etiqueta descartada não deve deixar EPC órfão no inventário.
+ * Apaga os EPCs ANTES do soft-delete (a FK batch é `on delete restrict`, mas
+ * aqui o batch só é atualizado, não removido — a ordem garante que nenhum EPC
+ * sobre apontando pro lote descartado).
+ *
+ * Requer policies de DELETE em rfid_epc_inventory e de UPDATE de deleted_at em
+ * production_batches (ver migrations/20260527_descartar_lote.sql).
+ */
+export async function discardBatch(batchId: string): Promise<void> {
+  const { error: epcErr } = await supabase
+    .from("rfid_epc_inventory")
+    .delete()
+    .eq("batch_id", batchId);
+  if (epcErr) throw epcErr;
+
+  const { error: pbErr } = await supabase
+    .from("production_batches")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", batchId);
+  if (pbErr) throw pbErr;
+}
+
 export async function fetchTodayHistory(): Promise<PrintedBatchEntry[]> {
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
@@ -302,6 +326,7 @@ export async function fetchTodayHistory(): Promise<PrintedBatchEntry[]> {
       .from("production_batches")
       .select("id, design_name, grade, rfid_impresso_at")
       .not("rfid_impresso_at", "is", null)
+      .is("deleted_at", null)
       .gte("rfid_impresso_at", startOfDay.toISOString())
       .order("rfid_impresso_at", { ascending: false })
       .limit(50),
