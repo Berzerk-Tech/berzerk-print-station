@@ -170,6 +170,27 @@ export function BatchBrowser({
       });
       setBatches(resolved);
       setHistory(hist);
+
+      // 2º passo (background): lotes com produto Shopify vinculado mas sem EAN
+      // local viram `shopifyFallbackAvailable`. Resolve via Shopify sozinho —
+      // assim "just works" como o painel do industrial, sem clicar "Buscar no
+      // Shopify". O cache (localStorage 1h) deixa as próximas cargas rápidas.
+      const needShopify = resolved.filter((r) => r.shopifyFallbackAvailable);
+      if (needShopify.length > 0) {
+        void (async () => {
+          try {
+            const reresolved = await resolveAllWithConcurrency(
+              needShopify.map((r) => r.batch),
+              CONCURRENCY,
+              { skipShopifyFallback: false },
+            );
+            const byId = new Map(reresolved.map((r) => [r.batch.id, r]));
+            setBatches((prev) => prev.map((b) => byId.get(b.batch.id) ?? b));
+          } catch (e) {
+            console.warn("[BatchBrowser] auto Shopify resolve falhou:", e);
+          }
+        })();
+      }
       // Quais lotes visíveis têm impressão de teste pra limpar (botão no card).
       // allSettled-style: falha aqui não derruba o load.
       try {

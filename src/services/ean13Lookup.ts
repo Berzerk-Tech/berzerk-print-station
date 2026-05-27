@@ -65,6 +65,19 @@ function normalize(s: string | null | undefined): string {
     .replace(/[̀-ͯ]/g, "");
 }
 
+/**
+ * Normalização "forte" pra casar nome de estampa ↔ design_template: além de
+ * acentos/case, colapsa qualquer pontuação/espaço num único espaço. Assim
+ * "Comam Frutas - Morango retro" casa com "Comam Frutas morango retro" —
+ * renomear o lote não perde o vínculo. Replica `normName` do industrial
+ * (`src/backend/services/rfidEanLookup.ts`).
+ */
+function normName(s: string | null | undefined): string {
+  return normalize(s)
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 // ────────────────────────────────────────────────────────────
 // Caches — module-level, session-scoped. Cleared via clearLookupCaches().
 // Esse cache é o que torna resolveBatch barato quando rodado em paralelo
@@ -79,6 +92,9 @@ type DesignTemplateEntry = {
 };
 
 const designTemplateByName = new Map<string, DesignTemplateEntry>();
+// Índice tolerante: normName(name) → set de shopify_product_ids (só não-nulos).
+// Usado no fallback de match quando o nome exato não bate (pontuação/acento).
+const designShopifyIdByNormName = new Map<string, Set<string>>();
 let designTemplatesLoaded = false;
 let designTemplatesLoading: Promise<void> | null = null;
 
@@ -98,14 +114,30 @@ async function loadDesignTemplates(): Promise<void> {
       for (const d of data) {
         if (!d.name) continue;
         const lname = String(d.name).toLowerCase();
+        const shopifyId = d.shopify_product_id
+          ? String(d.shopify_product_id)
+          : null;
         const imgs = d.images as { frente?: string[] } | null;
         const thumb = imgs?.frente?.[0] ?? null;
-        designTemplateByName.set(lname, {
-          shopify_product_id: d.shopify_product_id
-            ? String(d.shopify_product_id)
-            : null,
-          thumbnail: thumb,
-        });
+        // Pode haver mais de um template com o mesmo nome (ex: um sem vínculo
+        // Shopify). PREFERE o que tem shopify_product_id — senão o desktop
+        // pega a versão sem vínculo e o lote vira "não cadastrado". Espelha o
+        // `.not("shopify_product_id","is",null)` do industrial.
+        const existing = designTemplateByName.get(lname);
+        if (!existing || (!existing.shopify_product_id && shopifyId)) {
+          designTemplateByName.set(lname, {
+            shopify_product_id: shopifyId,
+            thumbnail: thumb ?? existing?.thumbnail ?? null,
+          });
+        } else if (existing && !existing.thumbnail && thumb) {
+          existing.thumbnail = thumb;
+        }
+        if (shopifyId) {
+          const key = normName(d.name as string);
+          const set = designShopifyIdByNormName.get(key) ?? new Set<string>();
+          set.add(shopifyId);
+          designShopifyIdByNormName.set(key, set);
+        }
       }
       designTemplatesLoaded = true;
     } catch (e) {
@@ -116,6 +148,21 @@ async function loadDesignTemplates(): Promise<void> {
     }
   })();
   return designTemplatesLoading;
+}
+
+/**
+ * Resolve `design_name` do lote → `shopify_product_id`, espelhando o industrial:
+ *   1. match exato por nome (case-insensitive) COM vínculo Shopify;
+ *   2. fallback tolerante por `normName` — só aceita se houver UM único
+ *      shopify_product_id candidato (evita casar estampa errada).
+ * Requer `loadDesignTemplates()` antes.
+ */
+function resolveShopifyIdForDesign(designName: string): string | null {
+  const exact = designTemplateByName.get(designName.toLowerCase());
+  if (exact?.shopify_product_id) return exact.shopify_product_id;
+  const set = designShopifyIdByNormName.get(normName(designName));
+  if (set && set.size === 1) return [...set][0];
+  return null;
 }
 
 type UnifiedProductEntry = {
@@ -305,6 +352,7 @@ async function loadShopifyProduct(
  */
 export function clearLookupCaches(): void {
   designTemplateByName.clear();
+  designShopifyIdByNormName.clear();
   designTemplatesLoaded = false;
   designTemplatesLoading = null;
   unifiedByShopify.clear();
@@ -376,11 +424,10 @@ export async function getEansForBatch(
     const designName = input.designName?.trim();
     if (!designName || input.sizes.length === 0) return empty();
 
-    // 1. design_templates → shopify_product_id (cached)
+    // 1. design_templates → shopify_product_id (cached, match exato + tolerante)
     await loadDesignTemplates();
-    const tpl = designTemplateByName.get(designName.toLowerCase());
-    if (!tpl?.shopify_product_id) return empty();
-    const shopifyId = tpl.shopify_product_id;
+    const shopifyId = resolveShopifyIdForDesign(designName);
+    if (!shopifyId) return empty();
 
     // 2. unified_products.overrides.barcodes (cached por shopify_product_id)
     await loadUnifiedProduct(shopifyId);
